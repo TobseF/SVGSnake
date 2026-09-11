@@ -322,9 +322,16 @@ def svg_dimensions(svg: bytes) -> tuple[float | None, float | None]:
     head = svg[:4000].decode("utf-8", "ignore")
 
     def _num(text: str) -> float | None:
+        """The number in an attribute value — unless it is a percentage.
+
+        ``width="100%"`` says nothing about how big the document is; the
+        viewBox does, and returning None here is what reaches it below.
+        """
         m = _NUM_RE.search(text)
+        if m is None or text[m.end():].lstrip().startswith("%"):
+            return None
         try:
-            return float(m.group()) if m else None
+            return float(m.group())
         except ValueError:
             return None
 

@@ -1,0 +1,15 @@
+# ---------------------------------------------------------------------------
+# SVGPaw — build-time dependencies (Windows packaging)
+#
+# Only needed to produce the .exe and the installer; see build.py.
+# Install the runtime dependencies from requirements.txt as well.
+# ---------------------------------------------------------------------------
+
+# Compiles the app to C and then to a native binary.
+nuitka>=2.4
+
+# Speeds Nuitka's own analysis up noticeably on large dependency graphs.
+ordered-set>=4.1.0
+
+# Used by Nuitka to compress the payload of an --onefile build.
+zstandard>=0.22.0

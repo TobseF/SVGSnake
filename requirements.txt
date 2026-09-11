@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# SVGO-UI — runtime dependencies
+# SVGPaw — runtime dependencies
 # ---------------------------------------------------------------------------
 
 # The optimizer itself: a pure-Python 1:1 port of SVGO 4.1.0.

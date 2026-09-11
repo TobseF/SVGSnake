@@ -1,17 +1,19 @@
-# SVGO-UI
+# <img alt="SVGPaw" src="docs/svg-paw-logo.svg" height="48"/>
+
+> Minimize your SVG footprint
 
 A desktop GUI for **[svgo-py](https://pypi.org/project/svgo-py/)** — the
 pure-Python port of [SVGO](https://github.com/svg/svgo), the SVG optimizer.
+
+![SVGPaw](docs/screenshot.png)
 
 Open (or drag & drop) SVG files, tune every SVGO plugin with a **live preview**,
 flip between **Original** and **Optimized** to see exactly what the optimizer
 did, and write the results back with a configurable file-name **prefix**.
 
 It is the desktop equivalent of [SVGOMG](https://svgomg.net) — same settings,
-same defaults, same output — but it works on local files, in batches, and
+same superpowers, same output — but it works on local files, in batches, and
 without a browser or Node.js.
-
-![SVGO-UI](docs/screenshot.png)
 
 ---
 
@@ -21,8 +23,10 @@ without a browser or Node.js.
   window, by dropping a whole folder, or as command-line arguments. `.svgz`
   (gzipped SVG) is decompressed transparently.
 - **Live optimization.** Every toggle and slider re-runs SVGO on the selected
-  file (debounced, on a background thread) and refreshes the preview and the
-  size read-out.
+  file (debounced) and refreshes the preview and the size read-out. The run
+  happens in a worker process, so the window stays responsive throughout — a
+  spinner in the corner of the preview says a new version is on its way, and
+  changing anything while it turns cancels that run and starts the new one.
 - **Original ⇄ Optimized** with one click — or the **Space** bar. Zoom and pan
   stay locked between the two views, so the comparison is pixel-for-pixel.
 - **Image and Markup views.** The *Image* view rasterizes the SVG with wheel
@@ -46,9 +50,24 @@ without a browser or Node.js.
 - **Configurable output** — a file-name **prefix** and suffix, an output folder
   (or "next to the original"), and an **overwrite without asking** switch.
 - Settings, plugin selection and the output rules are remembered between runs.
-- Dark theme with a red accent.
+- Dark theme with a red accent. The in-app icons are SVGs rendered by the app's
+  own renderer, so they stay sharp at any scale and are recoloured from the
+  palette rather than from a fixed bitmap.
 
 ---
+
+## Install
+
+### Windows
+
+Run **`SVGPaw-<version>-Setup.exe`**. It installs per-user (no admin rights
+needed) and bundles everything — no Python installation required. Building that
+installer yourself is covered in
+[Building the Windows app](#building-the-windows-app).
+
+### From source
+
+Any platform Tkinter runs on.
 
 ## Requirements
 
@@ -76,13 +95,13 @@ on-screen image preview is skipped (the *Markup* view keeps working).
 ## Usage
 
 ```bash
-python svgo_ui.py
+python svgpaw.py
 ```
 
 You can also pass files directly:
 
 ```bash
-python svgo_ui.py sample/tiger.svg sample/car.svg
+python svgpaw.py sample/svg-cat.svg sample/tiger.svg sample/car.svg
 ```
 
 1. Click **Open SVG files…**, or drop files onto the preview area.
@@ -138,7 +157,7 @@ fixed folder for everything.
 
 > **Careful:** with an empty prefix *and* an empty suffix, the optimized file
 > replaces the original. The settings dialog warns you when that combination is
-> selected. SVGO-UI asks before replacing any existing file unless
+> selected. SVGPaw asks before replacing any existing file unless
 > *Overwrite existing files without asking* is enabled.
 
 ---
@@ -168,7 +187,7 @@ Plugins always run in SVGO's own order, which is the order of the catalogue in
 [svgo_engine.py](svgo_engine.py) — regrouping the UI never changes the output.
 
 Output was verified against the reference JavaScript SVGO: for
-`sample/tiger.svg` with the default settings, SVGO-UI and upstream SVGO 4.1
+`sample/tiger.svg` with the default settings, SVGPaw and upstream SVGO 4.1
 produce **byte-identical** files. On documents with `<style>` blocks small
 differences can remain — `svgo-py` reimplements csso's value-level CSS
 minification but not its structural passes; see the
@@ -200,12 +219,17 @@ refuses to shrink.
 Settings are stored locally in:
 
 ```
-~/.svgo_ui/config.json
+~/.svgpaw/config.json
 ```
 
 It holds the output rules, the window's view preferences, which feature
-categories you collapsed, and your full SVGO plugin selection. Nothing is sent anywhere — SVGO-UI is entirely offline.
-Delete the file to return to the defaults.
+categories you collapsed, and your full SVGO plugin selection. Nothing is sent
+anywhere — SVGPaw is entirely offline. Delete the file to return to the
+defaults.
+
+If you used this app under its old name, the settings from `~/.svgo_ui/config.json`
+are picked up automatically the first time SVGPaw starts; the old file is left
+where it is.
 
 ---
 
@@ -219,21 +243,111 @@ Delete the file to return to the defaults.
 | *"SVGO error: …"* | That plugin combination failed on this document. The original is kept; turn the last plugin you changed back off. |
 | The optimized file is *larger* | Turn off **Compare gzipped** to see raw bytes, and check whether **Prettify markup** is on. |
 | The image looks wrong after optimizing | Raise the **number precision**, or turn off `convertPathData` / `mergePaths` / `removeHiddenElems`. |
-| Everything freezes for a moment on huge files | Optimization runs on a background thread, but it is pure Python; a 500 KB SVG takes roughly a second per pass. |
+| A big file takes a few seconds to update | Optimizing and rasterizing a 500 KB SVG is genuinely a second or two of work. It happens in a worker process, so the window keeps responding; the spinner in the preview corner shows it is still running. |
+
+---
+
+## Building the Windows app
+
+SVGPaw compiles to a native Windows program with
+[Nuitka](https://nuitka.net), which translates the Python sources to C and hands
+them to a real optimizing compiler. That is the reason to prefer it over a
+bytecode bundler such as PyInstaller here: the bundler ships the same CPython
+bytecode in a wrapper, while Nuitka removes the interpreter from the hot paths
+and — with `--lto` — lets the compiler inline across module boundaries. The
+optimizer is pure Python and CPU-bound, so that is exactly where the work is.
+
+### What you need
+
+- **Visual Studio 2022** with the *Desktop development with C++* workload.
+  MSVC produces the faster binary and is the best-tested backend for Nuitka's
+  LTO. Without it the build falls back to a Nuitka-managed MinGW64, which it
+  downloads on first use.
+- **[Inno Setup 6](https://jrsoftware.org/isinfo.php)** for the installer:
+
+  ```bash
+  winget install -e --id JRSoftware.InnoSetup
+  ```
+
+- The build dependencies:
+
+  ```bash
+  pip install -r requirements.txt -r requirements-build.txt
+  ```
+
+### Building
+
+```bash
+python build.py
+```
+
+That compiles the app to `dist\SVGPaw\` and, if Inno Setup is present, writes
+`dist\SVGPaw-<version>-Setup.exe`. Expect roughly five minutes for the first
+run; Nuitka caches the compiled C objects, so later runs take about half that.
+
+| Flag | Effect |
+| --- | --- |
+| `--clean` | Delete `build/` and `dist/` first |
+| `--no-installer` | Compile only |
+| `--installer-only` | Rebuild just the installer from the existing `dist/` |
+| `--onefile` | One portable `.exe` instead of a folder |
+| `--jobs N` | Parallel compile jobs (default: every core) |
+
+The default is a **standalone folder**, not `--onefile`. A onefile binary has to
+unpack itself into a temp directory on every launch, which costs a second or two
+of start-up; the installer puts the folder in place once, so that never happens.
+Use `--onefile` when you want a single file to copy around on a USB stick.
+
+**PyMuPDF is excluded from the build.** It is only the fallback renderer, resvg
+is what actually runs, and including it would add about 100 MB of binaries for a
+code path that is never reached. The import sits in a `try`/`except` and copes.
+Running from source is unaffected.
+
+The compiled program is self-contained — it carries its own Python, Tcl/Tk and
+every dependency — so the target machine needs no Python installation.
+
+### The installer
+
+`installer\svgpaw.iss` builds a standard Inno Setup wizard. It installs
+**per-user by default**, so there is no UAC prompt; the first page offers an
+all-users install for anyone who wants one. It offers three optional choices:
+
+- a **desktop shortcut**,
+- **"Optimize with SVGPaw"** in the right-click menu for `.svg` and `.svgz`
+  (on by default — it adds a verb without taking the file type over),
+- making SVGPaw the **default handler** for `.svg` and `.svgz` (off by default).
+
+SVGPaw always registers itself under *Open with*, whichever of those you pick.
+Uninstalling removes everything it wrote, and asks separately whether to delete
+`~/.svgpaw` — answering nothing (a silent uninstall) keeps your settings.
+
+It supports the usual unattended switches:
+
+```bash
+SVGPaw-1.0.0-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=contextmenu
+```
 
 ---
 
 ## Project layout
 
 ```
-SVGO-UI/
-├── svgo_ui.py          # the application (UI, preview, file handling)
-├── svgo_engine.py      # plugin catalogue + settings -> svgo-py invocation
-├── requirements.txt
-├── sample/             # two test SVGs
-└── docs/               # screenshots
+SVGPaw/
+├── svgpaw.py               # the application (UI, preview, file handling)
+├── svgo_worker.py          # the child process: optimize + rasterize, no Tk
+├── svgo_engine.py          # plugin catalogue + settings -> svgo-py invocation
+├── build.py                # Nuitka compile + installer build
+├── installer/
+│   └── svgpaw.iss          # Inno Setup script
+├── icon/
+│   ├── svg.ico             # app, installer and shell icon
+├── requirements.txt        # runtime dependencies
+├── requirements-build.txt  # packaging dependencies
+├── sample/                 # three test SVGs
+└── docs/                   # screenshots
 ```
 
+`build/` and `dist/` are produced by the build and are not in version control.
 `info/` holds the upstream sources kept for reference (svgo-py, SVGOMG, and the
 Recraft Vectorizer this UI's design is based on); nothing there is needed at
 runtime.

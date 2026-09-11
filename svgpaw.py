@@ -1,6 +1,6 @@
 """
-SVGO-UI
-=======
+SVGPaw — Minimize your SVG footprint
+====================================
 A desktop front-end for `svgo-py <https://pypi.org/project/svgo-py/>`_ — the
 pure-Python port of SVGO. Open (or drag & drop) SVG files, tune every SVGO
 plugin with a live preview, flip between *Original* and *Optimized*, and write
@@ -9,17 +9,19 @@ the result back with a configurable file-name prefix.
 Modelled on SVGOMG (https://svgomg.net) for the settings, and on the
 Recraft Vectorizer for the dark/red look and the preview plumbing.
 
-Run:  python svgo_ui.py
+Run:  python svgpaw.py
 """
 
 from __future__ import annotations
 
 import io
 import json
+import multiprocessing as mp
 import os
+import queue
+import re
 import sys
 import threading
-import traceback
 import gzip as _gzip
 from pathlib import Path
 import tkinter as tk
@@ -29,6 +31,7 @@ import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
 import svgo_engine as engine
+import svgo_worker
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -43,10 +46,35 @@ except Exception:  # pragma: no cover - optional dependency
 #  Constants / palette
 # --------------------------------------------------------------------------- #
 
-APP_NAME = "SVGO-UI"
+APP_NAME = "SVGPaw"
+APP_SLOGAN = "Minimize your SVG footprint"
+APP_VERSION = "1.0.0"
+APP_PUBLISHER = "Tobse"
 
-CONFIG_DIR = Path.home() / ".svgo_ui"
+#: Windows task-bar identity. Without it the shell groups the window under the
+#: Python interpreter and shows its icon instead of ours.
+APP_ID = "Tobse.SVGPaw.1"
+
+CONFIG_DIR = Path.home() / ".svgpaw"
 CONFIG_PATH = CONFIG_DIR / "config.json"
+
+#: Settings location used before the app was renamed to SVGPaw. Read once, on
+#: first start, so an existing plugin selection survives the rename.
+LEGACY_CONFIG_PATH = Path.home() / ".svgo_ui" / "config.json"
+
+#: Directory the app was started from — the source tree when run with Python,
+#: the unpacked program folder in a Nuitka build. Bundled assets sit next to it
+#: in both cases, so one helper covers both.
+APP_DIR = Path(__file__).resolve().parent
+
+ICON_ICO = APP_DIR / "icon" / "icon.ico"
+ICON_PNG = APP_DIR / "icon" / "icon.png"
+
+#: In-app artwork. These are SVGs on purpose — the app already carries a
+#: browser-faithful SVG renderer, so the icons stay crisp at any size or DPI
+#: instead of being resampled from a fixed bitmap.
+ICON_PAW_SVG = APP_DIR / "icon" / "paw.svg"
+ICON_SETTINGS_SVG = APP_DIR / "icon" / "settings.svg"
 
 # Dark theme with a red accent (same palette as the Recraft Vectorizer).
 COL_BG = "#161616"
@@ -62,7 +90,8 @@ COL_GREEN = "#4CAF7D"
 SVG_FILETYPES = [("SVG images", "*.svg *.svgz"), ("All files", "*.*")]
 
 #: Long edge the preview bitmap is rasterized at. Zooming scales this bitmap.
-RENDER_SIZE = 1400
+#: Defined by the worker, which is what actually rasterizes.
+RENDER_SIZE = svgo_worker.RENDER_SIZE
 
 #: Above this many characters the markup view is shown without highlighting.
 HIGHLIGHT_LIMIT = 200_000
@@ -109,41 +138,168 @@ def read_svg(path: Path) -> bytes:
     return data
 
 
-def render_svg_to_pil(svg_bytes: bytes, target: int = RENDER_SIZE) -> Image.Image | None:
-    """Rasterize an SVG document for the preview.
+def scaled_px(widget, value: float) -> int:
+    """Pixels for artwork on a raw ``tk.Canvas``, matched to CustomTkinter.
 
-    Uses resvg (browser-faithful, handles gradients/clip-paths, self-contained
-    wheels) and falls back to PyMuPDF. Returns ``None`` when no renderer works.
+    CustomTkinter scales its own widgets and fonts for the display's DPI, but a
+    plain canvas is drawn in raw pixels. Without this, hand-drawn artwork would
+    be the one thing in the window that does not grow with everything else.
     """
     try:
-        import resvg_py  # type: ignore
+        return max(1, round(value * ctk.ScalingTracker.get_widget_scaling(widget)))
+    except Exception:  # pragma: no cover - scaling is best-effort
+        return max(1, round(value))
 
-        png = resvg_py.svg_to_bytes(
-            svg_string=svg_bytes.decode("utf-8", "replace"), width=target
-        )
-        return Image.open(io.BytesIO(bytes(png))).convert("RGBA")
-    except Exception:
-        pass
 
+def virtual_screen(widget) -> tuple[int, int, int, int]:
+    """``(x, y, width, height)`` spanning every monitor, not just the primary.
+
+    Tk only knows about the primary screen, which would make a window restored
+    onto a second monitor look out of bounds.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            metric = ctypes.windll.user32.GetSystemMetrics
+            return metric(76), metric(77), metric(78), metric(79)
+        except Exception:  # pragma: no cover - falls back to the primary screen
+            pass
+    return 0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight()
+
+
+def fits_on_screen(widget, geometry: str) -> bool:
+    """Would a window with this geometry land somewhere the user can reach?
+
+    This guards against a saved position that points at a monitor which has
+    since been unplugged — the window would open into nowhere. The margins are
+    deliberately generous: it only has to catch "gone entirely", not "hangs
+    over the edge a little", which is a perfectly normal thing for a window.
+    """
+    parsed = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geometry.strip())
+    if parsed is None:
+        return False
+    width, height, x, y = (int(value) for value in parsed.groups())
+    left, top, span_x, span_y = virtual_screen(widget)
+    # The saved string is in CustomTkinter's unscaled coordinates, the screen
+    # metrics are in real pixels; one scaling factor is close enough for a
+    # sanity check, even on a mixed-DPI desk.
     try:
-        import pymupdf  # type: ignore
+        scale = ctk.ScalingTracker.get_window_scaling(widget)
+    except Exception:  # pragma: no cover
+        scale = 1.0
+    left, top, span_x, span_y = (v / scale for v in (left, top, span_x, span_y))
+    # Enough title bar has to be reachable to drag the window back.
+    return (x + width > left + 80 and x < left + span_x - 80
+            and y + height > top and y < top + span_y - 40)
 
-        doc = pymupdf.open(stream=svg_bytes, filetype="svg")
-        page = doc[0]
-        zoom = target / max(page.rect.width, page.rect.height, 1)
-        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=True)
-        mode = "RGBA" if pix.alpha else "RGB"
-        return Image.frombytes(mode, (pix.width, pix.height), pix.samples).convert("RGBA")
+
+def png_to_pil(png: bytes | None) -> Image.Image | None:
+    """Decode PNG bytes — the form bitmaps travel in — into a PIL image."""
+    if not png:
+        return None
+    try:
+        return Image.open(io.BytesIO(png)).convert("RGBA")
     except Exception:
         return None
 
 
-def warm_up_renderer() -> None:
-    """Pay resvg's one-off font-database cost up front, off the UI thread."""
+def render_svg_to_pil(svg_bytes: bytes, target: int = RENDER_SIZE) -> Image.Image | None:
+    """Rasterize an SVG document in *this* process. Returns None on failure.
+
+    Rendering blocks the UI (see :mod:`svgo_worker`), so this is only for the
+    small, one-off images the window itself is made of — the preview goes
+    through :class:`PreviewWorker` instead.
+    """
+    return png_to_pil(svgo_worker.render_svg_to_png(svg_bytes, target))
+
+
+# --------------------------------------------------------------------------- #
+#  Branding assets
+# --------------------------------------------------------------------------- #
+
+def render_svg_icon(path: Path, box: int, tint: str | None = None) -> "ctk.CTkImage | None":
+    """Rasterize a bundled SVG icon so it fits a ``box``x``box`` square.
+
+    Rendering happens at 4x and CustomTkinter scales the result down, which
+    keeps the icon sharp on high-DPI displays. ``tint`` recolours the artwork by
+    keeping only its alpha channel and filling it with one solid colour — these
+    icons are single-colour, so that repaints them to any palette entry without
+    having to edit the SVG source.
+
+    Returns ``None`` when the asset is missing or no renderer is available; the
+    callers fall back to a text glyph.
+    """
     try:
-        render_svg_to_pil(
-            b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>', 8
-        )
+        data = path.read_bytes()
+    except Exception:
+        return None
+    img = render_svg_to_pil(data, target=box * 4)
+    if img is None:
+        return None
+    if tint is not None:
+        solid = Image.new("RGBA", img.size, tint)
+        solid.putalpha(img.getchannel("A"))
+        img = solid
+    width, height = img.size
+    scale = box / max(width, height, 1)
+    size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    return ctk.CTkImage(light_image=img, dark_image=img, size=size)
+
+
+def _load_logo_image(size: int) -> "ctk.CTkImage | None":
+    """The paw mark for the sidebar header, or None if no asset renders."""
+    paw = render_svg_icon(ICON_PAW_SVG, size)
+    if paw is not None:
+        return paw
+    try:  # the app icon, should the SVG or the renderer be unavailable
+        img = Image.open(ICON_PNG).convert("RGBA")
+    except Exception:
+        return None
+    return ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
+
+
+def bind_hover_image(button: ctk.CTkButton, normal, hovered) -> None:
+    """Swap a button's icon while the pointer is over it.
+
+    CustomTkinter buttons are composites, so the pointer only ever reaches a
+    child widget — every child has to be bound, the same way Tooltip does it.
+    """
+    def _enter(_event=None):
+        button.configure(image=hovered)
+
+    def _leave(_event=None):
+        button.configure(image=normal)
+
+    def _bind(widget):
+        try:
+            widget.bind("<Enter>", _enter, add="+")
+            widget.bind("<Leave>", _leave, add="+")
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            _bind(child)
+
+    _bind(button)
+
+
+def apply_window_icon(window: tk.Misc) -> None:
+    """Give a window the paw icon — title bar, task bar and Alt-Tab.
+
+    ``iconbitmap`` is the only call Windows honours for the task bar, but it
+    needs a real ``.ico`` on disk; ``iconphoto`` is the cross-platform fallback
+    and also covers the case where the ``.ico`` was not shipped.
+    """
+    if ICON_ICO.exists():
+        try:
+            window.iconbitmap(default=str(ICON_ICO))
+            return
+        except Exception:
+            pass
+    try:
+        photo = ImageTk.PhotoImage(Image.open(ICON_PNG))
+        window.iconphoto(True, photo)
+        window._paw_icon = photo  # Tk does not keep its own reference
     except Exception:
         pass
 
@@ -212,6 +368,110 @@ class Tooltip:
 
 
 # --------------------------------------------------------------------------- #
+#  Busy indicator
+# --------------------------------------------------------------------------- #
+
+class Spinner(ctk.CTkFrame):
+    """A rotating arc plus a caption, shown while the preview is rebuilt.
+
+    Tk cannot composite, so the badge brings its own solid background and
+    floats in a corner of the stage rather than dimming the image behind it.
+    The arc is turned by ``after`` on the UI thread, so it also doubles as a
+    liveness check: if it ever stops mid-run, something is blocking the event
+    loop again.
+    """
+
+    DIAMETER = 12        # unscaled px of the arc itself
+    THICKNESS = 2
+    STEP_MS = 40         # ~25 frames a second is plenty for a spinner
+    STEP_DEG = -24       # negative: clockwise, like every other spinner
+
+    def __init__(self, master, text: str = "Updating preview…") -> None:
+        super().__init__(master, fg_color=COL_PANEL_2, corner_radius=16,
+                         border_width=1, border_color=COL_BORDER)
+        size = scaled_px(master, self.DIAMETER)
+        width = scaled_px(master, self.THICKNESS)
+        self.canvas = tk.Canvas(
+            self, width=size, height=size, bg=COL_PANEL_2,
+            highlightthickness=0, bd=0,
+        )
+        self.canvas.pack(side="left", padx=(10, 7), pady=7)
+        inset = width / 2
+        box = (inset, inset, size - inset, size - inset)
+        self.canvas.create_oval(*box, outline=COL_BORDER, width=width)
+        self._arc = self.canvas.create_arc(
+            *box, start=90, extent=105, style="arc", outline=COL_RED,
+            width=width,
+        )
+        self.label = ctk.CTkLabel(self, text=text, text_color=COL_TEXT_DIM,
+                                  font=ctk.CTkFont(size=12))
+        self.label.pack(side="left", padx=(0, 12))
+
+        self._angle = 90
+        self._tick_after: str | None = None
+
+    def start(self, text: str | None = None) -> None:
+        """Show the badge and turn the arc. Calling it again only re-labels."""
+        if text is not None:
+            self.label.configure(text=text)
+        self.place(relx=1.0, rely=0.0, anchor="ne", x=-14, y=14)
+        self.lift()
+        if self._tick_after is None:
+            self._tick()
+
+    def stop(self) -> None:
+        if self._tick_after is not None:
+            try:
+                self.after_cancel(self._tick_after)
+            except Exception:
+                pass
+            self._tick_after = None
+        self.place_forget()
+
+    def _tick(self) -> None:
+        self._angle = (self._angle + self.STEP_DEG) % 360
+        self.canvas.itemconfigure(self._arc, start=self._angle)
+        self._tick_after = self.after(self.STEP_MS, self._tick)
+
+
+class SavedPie(tk.Canvas):
+    """Pie showing what share of the file the optimization removed.
+
+    The wedge starts at twelve o'clock and grows clockwise, so it reads the
+    way a progress dial does. It carries no text of its own — it sits next to
+    the percentage and only makes that number graspable at a glance.
+    """
+
+    SIZE = 34            # unscaled; scaled_px matches it to the rest
+
+    def __init__(self, master, size: int = SIZE) -> None:
+        size = scaled_px(master, size)
+        super().__init__(master, width=size, height=size, bg=COL_PANEL,
+                         highlightthickness=0, bd=0)
+        pad = 1
+        box = (pad, pad, size - pad, size - pad)
+        self._track = self.create_oval(*box, fill=COL_PANEL_2, outline=COL_BORDER)
+        self._wedge = self.create_arc(*box, start=90, extent=0, fill=COL_GREEN,
+                                      outline="", state="hidden")
+
+    def set_percent(self, percent: float | None) -> None:
+        """``percent`` is what was saved; negative means the file grew."""
+        if percent is None:
+            self.itemconfigure(self._wedge, state="hidden")
+            return
+        # A file that grew has no meaningful "share removed", so the wedge then
+        # shows how much was *added*, in red. Either way it is capped at a full
+        # circle — Tk draws nothing at all for an extent of exactly 360.
+        share = min(abs(percent) / 100.0, 1.0)
+        self.itemconfigure(
+            self._wedge,
+            state="normal",
+            extent=-359.99 if share >= 0.9999 else -360.0 * share,
+            fill=COL_GREEN if percent > 0 else COL_RED,
+        )
+
+
+# --------------------------------------------------------------------------- #
 #  Persistent configuration
 # --------------------------------------------------------------------------- #
 
@@ -226,6 +486,10 @@ class Config:
         "bg_mode": "checker",
         "collapsed_groups": [],
         "last_open_dir": "",
+        #: Where the window was when it was last closed, so it comes back on
+        #: the same monitor and at the same size.
+        "window_geometry": "",
+        "window_maximized": False,
         "svgo_settings": engine.default_settings(),
     }
 
@@ -234,9 +498,12 @@ class Config:
         self.load()
 
     def load(self) -> None:
+        path = CONFIG_PATH
+        if not path.exists() and LEGACY_CONFIG_PATH.exists():
+            path = LEGACY_CONFIG_PATH  # carried over from the SVGO-UI days
         try:
-            if CONFIG_PATH.exists():
-                loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            if path.exists():
+                loaded = json.loads(path.read_text(encoding="utf-8"))
                 self.data.update({k: loaded[k] for k in loaded if k in self.DEFAULTS})
         except Exception:
             pass  # fall back to defaults on any corruption
@@ -291,6 +558,173 @@ class SvgDoc:
         self.original_pil = None
         self.optimized_pil = None
         self.render_stamp = None
+
+
+# --------------------------------------------------------------------------- #
+#  Preview worker — the whole concurrency story
+# --------------------------------------------------------------------------- #
+
+class PreviewWorker:
+    """Runs optimize-and-render jobs outside the UI process, one at a time.
+
+    The rules are short enough to keep in your head:
+
+    * **One job at a time.** Every job gets a sequence number; only the newest
+      one is ever delivered.
+    * **A new job cancels the running one.** Cancelling means killing the child
+      process — SVGO and the rasterizer are not interruptible, and waiting for
+      a result nobody wants any more is exactly the lag we are getting rid of.
+      A fresh child is started for the new job (~a third of a second, paid
+      while the spinner turns).
+    * **Nothing blocks the UI thread.** Results are picked up by a short
+      ``after`` poll, so the window keeps painting, scrolling and reacting
+      while a job runs.
+
+    If child processes turn out to be unavailable — some frozen builds, locked
+    down machines — the worker quietly falls back to a thread. A thread cannot
+    be killed, so a cancelled job then runs to completion in the background and
+    its result is dropped on arrival; the window stays usable either way.
+    """
+
+    POLL_MS = 40
+
+    def __init__(self, widget: tk.Misc, on_result, on_degraded=None) -> None:
+        self._widget = widget            # any widget will do: we need `after`
+        self._on_result = on_result
+        self._on_degraded = on_degraded
+        self._ctx = mp.get_context("spawn")
+        self._proc: "mp.process.BaseProcess | None" = None
+        self._jobs = None
+        self._results = None
+        self._seq = 0
+        self._pending: tuple | None = None   # the job in flight, for a retry
+        self._threaded = False
+        self._closed = False
+        self._widget.after(self.POLL_MS, self._poll)
+
+    # ---- public API ------------------------------------------------------ #
+    def submit(self, svg: bytes, settings: dict, path: str,
+               render_original: bool) -> int:
+        """Queue a job, cancelling whatever was running. Returns its sequence."""
+        self._seq += 1
+        if self._pending is not None:
+            self._kill()                 # cancel: the old run is thrown away
+        job = (self._seq, svg, settings, path, render_original)
+        self._pending = job
+        self._dispatch(job)
+        return self._seq
+
+    def prewarm(self) -> None:
+        """Start the child now so the first job does not wait for it."""
+        if not self._threaded:
+            self._ensure_child()
+
+    def cancel(self) -> None:
+        """Drop the running job without starting a new one."""
+        self._seq += 1
+        if self._pending is not None:
+            self._kill()
+
+    def shutdown(self) -> None:
+        self._closed = True
+        self._kill()
+
+    # ---- plumbing -------------------------------------------------------- #
+    def _dispatch(self, job: tuple) -> None:
+        if not self._threaded:
+            self._ensure_child()
+        if self._jobs is not None:
+            try:
+                self._jobs.put(job)
+                return
+            except Exception:
+                self._degrade()          # the pipe is gone; stop trying
+                self._kill(keep_pending=True)
+        threading.Thread(target=self._run_in_thread, args=(job,),
+                         daemon=True).start()
+
+    def _ensure_child(self) -> None:
+        if self._proc is not None and self._proc.is_alive():
+            return
+        try:
+            self._jobs = self._ctx.Queue()
+            self._results = self._ctx.Queue()
+            self._proc = self._ctx.Process(
+                target=svgo_worker.worker_loop, args=(self._jobs, self._results),
+                name="svgpaw-preview", daemon=True,
+            )
+            self._proc.start()
+        except Exception:
+            self._degrade()
+            self._proc = self._jobs = self._results = None
+
+    def _degrade(self) -> None:
+        """Give up on child processes for good, and say so once.
+
+        Worth reporting rather than hiding: without a child process the
+        rasterizer blocks the event loop again, which is exactly the symptom
+        this class exists to remove.
+        """
+        if self._threaded:
+            return
+        self._threaded = True
+        if self._on_degraded is not None:
+            self._widget.after(0, self._on_degraded)
+
+    def _run_in_thread(self, job: tuple) -> None:
+        result = svgo_worker.run_job(*job)
+        self._widget.after(0, lambda: self._deliver(result))
+
+    def _kill(self, keep_pending: bool = False) -> None:
+        """End the current run. The queues go with the process on purpose:
+        a child killed mid-``put`` can leave them in an unusable state."""
+        proc, self._proc = self._proc, None
+        queues, self._jobs, self._results = (self._jobs, self._results), None, None
+        if not keep_pending:
+            self._pending = None
+        if proc is not None:
+            try:
+                if proc.is_alive():
+                    proc.terminate()
+            except Exception:
+                pass
+        for q in queues:
+            if q is None:
+                continue
+            try:
+                q.cancel_join_thread()  # do not wait on a pipe nobody reads
+                q.close()
+            except Exception:
+                pass
+
+    def _poll(self) -> None:
+        results = self._results
+        if results is not None:
+            while True:
+                try:
+                    result = results.get_nowait()
+                except queue.Empty:
+                    break
+                except (OSError, ValueError, EOFError):
+                    break
+                self._deliver(result)
+        # A child that died without answering (a crash, or a build without
+        # working process support) must not leave the spinner turning forever.
+        if (self._pending is not None and self._proc is not None
+                and not self._proc.is_alive()):
+            job = self._pending
+            self._kill(keep_pending=True)
+            self._degrade()
+            threading.Thread(target=self._run_in_thread, args=(job,),
+                             daemon=True).start()
+        if not self._closed:
+            self._widget.after(self.POLL_MS, self._poll)
+
+    def _deliver(self, result: tuple) -> None:
+        if result[0] != self._seq:
+            return                       # superseded: this answer is stale
+        self._pending = None
+        self._on_result(*result)
 
 
 # --------------------------------------------------------------------------- #
@@ -647,8 +1081,12 @@ class PluginGroup:
         for _pid, _haystack, row in matches:
             row.pack(fill="x", padx=8, pady=1)
 
+        # Unpack unconditionally before re-packing: pack() appends to the end,
+        # so a group that kept its slot while the others were hidden would jump
+        # ahead of them the moment they came back. The caller walks the groups
+        # in catalogue order, which is what restores it.
+        self.container.pack_forget()
         if not matches:
-            self.container.pack_forget()
             return 0
         self.container.pack(fill="x", padx=8, pady=(6, 0))
         # A search is useless if the hits stay folded away.
@@ -750,7 +1188,7 @@ class SettingsDialog(ctk.CTkToplevel):
         ).pack(anchor="w", padx=16, pady=(0, 4))
         ctk.CTkLabel(
             body,
-            text="When this is off, SVGO-UI asks before replacing a file that already exists.",
+            text=f"When this is off, {APP_NAME} asks before replacing a file that already exists.",
             text_color=COL_TEXT_DIM, anchor="w", justify="left", wraplength=470,
             font=ctk.CTkFont(size=11),
         ).pack(fill="x", padx=16, pady=(0, 12))
@@ -827,10 +1265,15 @@ class App(*_AppBase):  # type: ignore[misc]
         super().__init__()
         self.config_ref = Config()
 
-        self.title(APP_NAME)
+        self.title(f"{APP_NAME} — {APP_SLOGAN}")
         self.geometry("1480x900")
         self.minsize(1180, 700)
+        #: Size and position to save on exit. A maximized window must not
+        #: overwrite it, or there would be nothing to restore down to.
+        self._normal_geometry = self.geometry()
+        self._restore_geometry()
         self.configure(fg_color=COL_BG)
+        apply_window_icon(self)
 
         self._dnd_ready = False
         if _DND_AVAILABLE:
@@ -845,7 +1288,8 @@ class App(*_AppBase):  # type: ignore[misc]
         self.current: int = -1
         self.settings: dict = engine.normalize_settings(self.config_ref["svgo_settings"])
         self.showing_optimized = True
-        self._job_seq = 0
+        #: document + settings snapshot the job in flight belongs to
+        self._job: tuple[SvgDoc, str] | None = None
         self._optimize_after: str | None = None
         self._row_widgets: list[tuple[ctk.CTkFrame, ctk.CTkLabel, ctk.CTkLabel]] = []
         self._plugin_vars: dict[str, ctk.BooleanVar] = {}
@@ -853,21 +1297,51 @@ class App(*_AppBase):  # type: ignore[misc]
         self._busy = False
 
         self._build_layout()
+        self.worker = PreviewWorker(self, self._on_optimized,
+                                    self._on_worker_degraded)
+        self.worker.prewarm()
         self._update_file_list()
         self._refresh_all()
         self._setup_dnd()
         self._bind_keys()
 
-        threading.Thread(target=warm_up_renderer, daemon=True).start()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---- window plumbing ------------------------------------------------ #
+    def _restore_geometry(self) -> None:
+        """Put the window back where it was when it was last closed."""
+        saved = str(self.config_ref["window_geometry"] or "")
+        if not saved or not fits_on_screen(self, saved):
+            return
+        try:
+            self.geometry(saved)
+        except Exception:  # pragma: no cover - a corrupt config must not block
+            return
+        self._normal_geometry = saved
+        if self.config_ref["window_maximized"]:
+            # Only once the window is on screen: maximizing an unmapped window
+            # makes Tk drop the position we just asked for.
+            self.after(0, lambda: self.state("zoomed"))
+
+    def _remember_geometry(self, event=None) -> None:
+        # Descendants deliver their own <Configure> here through the bindtags,
+        # so the window's own events have to be picked out.
+        if event is not None and event.widget is not self:
+            return
+        if self.state() == "normal":
+            self._normal_geometry = self.geometry()
+
     def _on_close(self) -> None:
+        self._remember_geometry()
+        self.config_ref["window_geometry"] = self._normal_geometry
+        self.config_ref["window_maximized"] = self.state() == "zoomed"
         self.config_ref["svgo_settings"] = self.settings
         self.config_ref.save()
+        self.worker.shutdown()
         self.destroy()
 
     def _bind_keys(self) -> None:
+        self.bind("<Configure>", self._remember_geometry, add="+")
         self.bind("<Control-o>", lambda _e: self._choose_files())
         self.bind("<Control-s>", lambda _e: self._save_current())
         self.bind("<Control-Shift-S>", lambda _e: self._save_all())
@@ -922,23 +1396,36 @@ class App(*_AppBase):  # type: ignore[misc]
         # Header -------------------------------------------------------------
         header = ctk.CTkFrame(side, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 2))
+        logo = _load_logo_image(30)
+        if logo is not None:
+            ctk.CTkLabel(header, image=logo, text="").pack(side="left")
+            self._logo_image = logo  # keep a reference alive
+        else:
+            ctk.CTkLabel(
+                header, text="●", text_color=COL_RED,
+                font=ctk.CTkFont(size=22, weight="bold"),
+            ).pack(side="left")
         ctk.CTkLabel(
-            header, text="●", text_color=COL_RED,
-            font=ctk.CTkFont(size=22, weight="bold"),
-        ).pack(side="left")
-        ctk.CTkLabel(
-            header, text=" SVGO-UI", font=ctk.CTkFont(size=20, weight="bold"),
+            header, text=f"  {APP_NAME}", font=ctk.CTkFont(size=20, weight="bold"),
             text_color=COL_TEXT,
         ).pack(side="left")
+        # The gear reads as a normal-weight glyph at this size, so it gets the
+        # full text colour rather than the dimmed one, and turns red on hover.
+        self._gear_icon = render_svg_icon(ICON_SETTINGS_SVG, 18, tint=COL_TEXT)
+        self._gear_icon_hover = render_svg_icon(ICON_SETTINGS_SVG, 18, tint=COL_RED)
         gear = ctk.CTkButton(
-            header, text="⚙", width=36, height=36, font=ctk.CTkFont(size=18),
-            fg_color="transparent", hover_color=COL_PANEL_2, text_color=COL_TEXT_DIM,
-            command=self._open_settings,
+            header, text="", width=36, height=36, font=ctk.CTkFont(size=18),
+            fg_color="transparent", hover_color=COL_PANEL_2, text_color=COL_TEXT,
+            image=self._gear_icon, command=self._open_settings,
         )
+        if self._gear_icon is None:  # no renderer — keep a visible glyph
+            gear.configure(text="⚙")
         gear.pack(side="right")
+        if self._gear_icon is not None and self._gear_icon_hover is not None:
+            bind_hover_image(gear, self._gear_icon, self._gear_icon_hover)
         Tooltip(gear, "Settings — output folder, file-name prefix, overwriting")
         ctk.CTkLabel(
-            side, text=f"SVG minifier · svgo-py {engine.svgo_version()}",
+            side, text=f"{APP_SLOGAN} · svgo-py {engine.svgo_version()}",
             text_color=COL_TEXT_DIM, font=ctk.CTkFont(size=11), anchor="w",
         ).grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 4))
 
@@ -1174,6 +1661,9 @@ class App(*_AppBase):  # type: ignore[misc]
         self.code_view = CodeView(stage, fg_color=COL_PANEL, corner_radius=12)
         # placed on demand by _on_mode_toggle
 
+        # Floats over whichever of the two is showing; hidden while idle.
+        self.spinner = Spinner(stage)
+
         # Viewer controls ----------------------------------------------------
         ctrl = ctk.CTkFrame(right, fg_color="transparent")
         ctrl.grid(row=2, column=0, sticky="ew", padx=22, pady=(8, 0))
@@ -1210,7 +1700,8 @@ class App(*_AppBase):  # type: ignore[misc]
         stats.grid_columnconfigure((0, 1, 2), weight=1)
         self.head_original, self.stat_original = self._stat(stats, 0, "Original")
         self.head_optimized, self.stat_optimized = self._stat(stats, 1, "Optimized")
-        self.head_saved, self.stat_saved = self._stat(stats, 2, "Saved")
+        self.head_saved, self.stat_saved, self.saved_pie = self._stat(
+            stats, 2, "Saved", pie=True)
 
         # Actions -------------------------------------------------------------
         actions = ctk.CTkFrame(right, fg_color="transparent")
@@ -1251,6 +1742,7 @@ class App(*_AppBase):  # type: ignore[misc]
         self.progress = ctk.CTkProgressBar(foot, progress_color=COL_RED, height=4)
         self.progress.set(0)
         self.progress.pack(fill="x", pady=(0, 4))
+        self._show_progress(False)
         self.status = ctk.CTkLabel(
             foot, text="Ready.", text_color=COL_TEXT_DIM, anchor="w",
         )
@@ -1258,7 +1750,7 @@ class App(*_AppBase):  # type: ignore[misc]
 
         self.refresh_target_hint()
 
-    def _stat(self, parent, col: int, title: str) -> tuple[ctk.CTkLabel, ctk.CTkLabel]:
+    def _stat(self, parent, col: int, title: str, pie: bool = False):
         cell = ctk.CTkFrame(parent, fg_color="transparent")
         cell.grid(row=0, column=col, sticky="nsew", padx=18, pady=12)
         heading = ctk.CTkLabel(
@@ -1266,15 +1758,22 @@ class App(*_AppBase):  # type: ignore[misc]
             font=ctk.CTkFont(size=11, weight="bold"),
         )
         heading.pack(anchor="w")
+        # The pie sits beside the number, so that row needs its own container.
+        row = ctk.CTkFrame(cell, fg_color="transparent")
+        row.pack(anchor="w", fill="x")
         value = ctk.CTkLabel(
-            cell, text="–", text_color=COL_TEXT,
+            row, text="–", text_color=COL_TEXT,
             font=ctk.CTkFont(size=20, weight="bold"),
         )
-        value.pack(anchor="w")
+        value.pack(side="left")
+        chart = None
+        if pie:
+            chart = SavedPie(row)
+            chart.pack(side="left", padx=(14, 0))
         Tooltip(cell, "Compare gzipped decides whether these are the raw file "
                       "sizes or the sizes after gzip compression. The file list "
                       "always shows raw bytes.")
-        return heading, value
+        return (heading, value, chart) if pie else (heading, value)
 
     # ---- file handling --------------------------------------------------- #
     def _choose_files(self) -> None:
@@ -1507,61 +2006,98 @@ class App(*_AppBase):  # type: ignore[misc]
     def _stamp(self) -> str:
         return json.dumps(self.settings, sort_keys=True)
 
+    def _show_progress(self, visible: bool) -> None:
+        """Show or hide the progress bar without letting the layout jump.
+
+        A bar that sits there at zero claims something is running. Un-packing
+        it would shift the status line under it every time a job starts, so it
+        keeps its four pixels and is simply painted in the window's own
+        background colour while idle.
+        """
+        self.progress.configure(
+            fg_color=COL_PANEL_2 if visible else COL_BG,
+            progress_color=COL_RED if visible else COL_BG,
+        )
+
+    def _set_working(self, working: bool, text: str = "") -> None:
+        """Turn the busy indicators on or off — spinner, progress bar."""
+        if working:
+            self.spinner.start(text or "Updating preview…")
+            self.progress.configure(mode="indeterminate")
+            self._show_progress(True)
+            self.progress.start()
+        else:
+            self.spinner.stop()
+            self.progress.stop()
+            self.progress.configure(mode="determinate")
+            self.progress.set(0)
+            self._show_progress(False)
+
     def _refresh_all(self) -> None:
-        """Re-run SVGO for the selected document and refresh everything."""
+        """Re-run SVGO for the selected document and refresh everything.
+
+        The run itself happens in :class:`PreviewWorker`; all this does is hand
+        it the job and put the window into its "working" state. Whatever is
+        already known — the original and its size — goes on screen right away,
+        so switching files never leaves the previous file's numbers up.
+        """
         self._optimize_after = None
         doc = self.doc
         if doc is None:
+            self._finish_job()
             self.viewer.set_image(
                 None, "Open an SVG file,\nor drag & drop one here.")
             self.code_view.set_content("")
             self.info_label.configure(text="")
             for stat in (self.stat_original, self.stat_optimized, self.stat_saved):
                 stat.configure(text="–", text_color=COL_TEXT)
+            self.saved_pie.set_percent(None)
             self._set_actions_enabled(False)
             return
 
         stamp = self._stamp()
         if doc.optimized is not None and doc.stamp == stamp and doc.render_stamp == stamp:
+            self._finish_job()
             self._show_doc()
             return
 
-        self._job_seq += 1
-        seq = self._job_seq
         settings = json.loads(json.dumps(self.settings))
-        self.progress.configure(mode="indeterminate")
-        self.progress.start()
+        self._job = (doc, stamp)
+        # Submitting cancels whatever was still running for the previous
+        # settings, so the newest change is always the one being worked on.
+        self.worker.submit(doc.original, settings, str(doc.path),
+                           render_original=doc.original_pil is None)
+        self._set_working(True, f"Optimizing {doc.name}…")
         self.status.configure(text=f"Optimizing {doc.name}…", text_color=COL_TEXT_DIM)
-        # Show what is already known (the original, its size) while SVGO runs,
-        # so switching files never leaves the previous file's numbers on screen.
         self._show_doc()
 
-        def worker() -> None:
-            try:
-                optimized = engine.optimize_svg(doc.original, settings, str(doc.path))
-                error = None
-            except engine.SvgoError as exc:
-                optimized, error = None, str(exc)
-            except Exception:  # pragma: no cover
-                optimized, error = None, traceback.format_exc().splitlines()[-1]
+    def _on_worker_degraded(self) -> None:
+        """No child process available: the preview is back in this process."""
+        self.status.configure(
+            text="Preview worker unavailable — the window may stutter while "
+                 "large files update.",
+            text_color=COL_TEXT_DIM,
+        )
 
-            original_pil = doc.original_pil or render_svg_to_pil(doc.original)
-            optimized_pil = render_svg_to_pil(optimized) if optimized else None
-            self.after(0, lambda: self._on_optimized(
-                seq, doc, stamp, optimized, error, original_pil, optimized_pil))
+    def _finish_job(self) -> None:
+        """Drop the job in flight, if any, and leave the working state."""
+        if self._job is not None:
+            self.worker.cancel()
+            self._job = None
+        self._set_working(False)
 
-        threading.Thread(target=worker, daemon=True).start()
+    def _on_optimized(self, _seq: int, optimized: bytes | None, error: str | None,
+                      original_png: bytes | None, optimized_png: bytes | None) -> None:
+        """A finished job, handed over on the UI thread by the worker."""
+        if self._job is None:
+            return
+        doc, stamp = self._job
+        self._job = None
+        self._set_working(False)
 
-    def _on_optimized(self, seq: int, doc: SvgDoc, stamp: str, optimized: bytes | None,
-                      error: str | None, original_pil, optimized_pil) -> None:
-        if seq != self._job_seq:
-            return  # superseded by a newer run
-        self.progress.stop()
-        self.progress.configure(mode="determinate")
-        self.progress.set(0)
-
-        doc.original_pil = original_pil
-        doc.optimized_pil = optimized_pil
+        if original_png is not None:
+            doc.original_pil = png_to_pil(original_png)
+        doc.optimized_pil = png_to_pil(optimized_png)
         doc.optimized = optimized
         doc.error = error
         doc.stamp = stamp
@@ -1626,6 +2162,7 @@ class App(*_AppBase):  # type: ignore[misc]
             self.stat_original.configure(text=human_size(before), text_color=COL_TEXT)
             self.stat_optimized.configure(text="–", text_color=COL_TEXT)
             self.stat_saved.configure(text="–", text_color=COL_TEXT)
+            self.saved_pie.set_percent(None)
             return
 
         after = engine.gzip_size(doc.optimized) if gzipped else len(doc.optimized)
@@ -1636,6 +2173,7 @@ class App(*_AppBase):  # type: ignore[misc]
             text=f"{saved:.1f}%" if saved >= 0 else f"+{-saved:.1f}%",
             text_color=COL_GREEN if saved > 0 else COL_RED,
         )
+        self.saved_pie.set_percent(saved)
 
     def _set_actions_enabled(self, enabled: bool) -> None:
         state = "normal" if enabled and not self._busy else "disabled"
@@ -1781,8 +2319,10 @@ class App(*_AppBase):  # type: ignore[misc]
 
         self._busy = True
         self._set_actions_enabled(False)
+        self.spinner.start("Saving optimized files…")
         self.progress.configure(mode="determinate")
         self.progress.set(0)
+        self._show_progress(True)
         settings = json.loads(json.dumps(self.settings))
         total = len(targets)
 
@@ -1812,7 +2352,9 @@ class App(*_AppBase):  # type: ignore[misc]
     def _on_save_all_done(self, written: int, failures: list[str],
                           before: int, after: int) -> None:
         self._busy = False
+        self.spinner.stop()
         self.progress.set(0)
+        self._show_progress(False)
         self._set_actions_enabled(self.doc is not None and self.doc.optimized is not None)
         noun = "file" if written == 1 else "files"
         if failures:
@@ -1838,7 +2380,23 @@ class App(*_AppBase):  # type: ignore[misc]
 #  Entry point
 # --------------------------------------------------------------------------- #
 
+def _set_windows_app_id() -> None:
+    """Detach the task-bar entry from the Python host so it shows the paw."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:
+        pass
+
+
 def main() -> None:
+    # A spawned worker re-runs this executable; without this it would open a
+    # second window instead of answering jobs.
+    mp.freeze_support()
+    _set_windows_app_id()
     ctk.set_appearance_mode("dark")
     app = App()
     # Open files passed on the command line.
