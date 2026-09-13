@@ -1,0 +1,40 @@
+# ---------------------------------------------------------------------------
+#  SVGPaw — containerised Linux build
+#
+#      docker compose run --rm build-linux           # compile + archive + AppImage
+#      docker compose run --rm build-linux python build.py --no-installer
+#      docker compose run --rm shell                 # poke around inside
+#
+#  Artefacts land in dist/linux-x64/ on the host. The Windows build writes to
+#  dist/windows-x64/, so the two never touch each other.
+# ---------------------------------------------------------------------------
+
+x-build-linux: &build-linux
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.linux
+  image: svgpaw-build:linux
+  working_dir: /src
+  volumes:
+    # The source tree is mounted rather than copied, so a rebuild needs no
+    # image rebuild and the artefacts appear directly on the host.
+    - .:/src
+    # Nuitka's C output and ccache survive between runs; without these two a
+    # second build recompiles everything from scratch.
+    - nuitka-cache:/cache/nuitka
+    - ccache:/cache/ccache
+
+services:
+  build-linux:
+    <<: *build-linux
+    command: ["python", "build.py"]
+
+  shell:
+    <<: *build-linux
+    command: ["bash"]
+    stdin_open: true
+    tty: true
+
+volumes:
+  nuitka-cache:
+  ccache:

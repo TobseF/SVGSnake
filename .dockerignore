@@ -1,0 +1,16 @@
+# Keep the build context small. The source tree is bind-mounted at run time
+# (see docker-compose.yml), so the image only needs the requirements files —
+# everything here would otherwise be uploaded to the daemon on every build,
+# and dist/ alone is well over 50 MB.
+build/
+dist/
+info/
+.git/
+.idea/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+docs/
+sample/

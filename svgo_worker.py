@@ -48,8 +48,9 @@ Result = tuple
 def render_svg_to_png(svg_bytes: bytes | None, target: int = RENDER_SIZE) -> bytes | None:
     """Rasterize an SVG document to PNG bytes for the preview.
 
-    Uses resvg (browser-faithful, handles gradients/clip-paths, self-contained
-    wheels) and falls back to PyMuPDF. Returns ``None`` when no renderer works.
+    Uses resvg: browser-faithful (gradients, clip-paths, CSS-class styling) and
+    shipped as self-contained wheels for every platform we target. Returns
+    ``None`` when it is unavailable or the document does not render.
     """
     if not svg_bytes:
         return None
@@ -61,17 +62,6 @@ def render_svg_to_png(svg_bytes: bytes | None, target: int = RENDER_SIZE) -> byt
             svg_string=svg_bytes.decode("utf-8", "replace"), width=target
         )
         return bytes(png)
-    except Exception:
-        pass
-
-    try:
-        import pymupdf  # type: ignore
-
-        doc = pymupdf.open(stream=svg_bytes, filetype="svg")
-        page = doc[0]
-        zoom = target / max(page.rect.width, page.rect.height, 1)
-        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=True)
-        return pix.tobytes("png")
     except Exception:
         return None
 

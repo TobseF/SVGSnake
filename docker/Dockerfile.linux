@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1
+# ---------------------------------------------------------------------------
+#  SVGPaw — Linux build environment
+#
+#  Produces the Linux artefacts from any host that runs Docker, including
+#  Windows via WSL2. This is not cross-compiling: the container is a real
+#  Linux userland, so Nuitka compiles and links natively inside it.
+#
+#      docker compose run --rm build-linux
+# ---------------------------------------------------------------------------
+
+# Ubuntu 22.04 carries glibc 2.35, and that choice is the whole point of
+# building in a container rather than on whatever distro happens to be at hand:
+# glibc is forward compatible but never backward. A binary linked here starts on
+# anything newer — Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 9+ — whereas one
+# linked on a current distro would refuse to start on any of the older ones.
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NUITKA_CACHE_DIR=/cache/nuitka \
+    CCACHE_DIR=/cache/ccache
+
+# Jammy's own Python is 3.10; deadsnakes provides 3.13 so the container matches
+# a current Windows development environment and the two builds cannot drift.
+#
+# python3.13-tk is not optional. Tkinter is a system package on Linux, never a
+# wheel, and without it Nuitka gets halfway through before failing.
+#
+# The -dev libraries are the other half of that story: Nuitka links the stdlib
+# extension modules it pulls in, so zlib (svgz), lzma, bz2 and ffi each need
+# their system library present at link time. build-essential also brings make,
+# which gcc's LTO mode wants for parallel linking.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates curl gnupg \
+ && add-apt-repository -y ppa:deadsnakes/ppa \
+ && apt-get update && apt-get install -y --no-install-recommends \
+        python3.13 python3.13-dev python3.13-venv python3.13-tk \
+        build-essential patchelf ccache file desktop-file-utils zsync \
+        zlib1g-dev libffi-dev libssl-dev libbz2-dev liblzma-dev libsqlite3-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# appimagetool turns the standalone folder into a single launchable file. It is
+# itself an AppImage, and containers have no FUSE — APPIMAGE_EXTRACT_AND_RUN
+# (set by build.py when it invokes the tool) is what makes it run anyway.
+RUN curl -fsSL -o /usr/local/bin/appimagetool \
+        "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$(uname -m).AppImage" \
+ && chmod +x /usr/local/bin/appimagetool
+
+# A venv keeps pip away from the system Python that apt manages. It inherits the
+# stdlib of python3.13, tkinter included.
+RUN python3.13 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copied separately from the source tree so that editing the app does not
+# invalidate this layer and reinstall every wheel on the next build.
+COPY requirements.txt requirements-build.txt /tmp/
+RUN pip install --upgrade pip \
+ && pip install -r /tmp/requirements.txt -r /tmp/requirements-build.txt
+
+RUN mkdir -p /cache/nuitka /cache/ccache
+WORKDIR /src
+
+CMD ["python", "build.py"]

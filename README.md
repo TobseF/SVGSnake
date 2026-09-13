@@ -63,7 +63,19 @@ without a browser or Node.js.
 Run **`SVGPaw-<version>-Setup.exe`**. It installs per-user (no admin rights
 needed) and bundles everything — no Python installation required. Building that
 installer yourself is covered in
-[Building the Windows app](#building-the-windows-app).
+[Building](#building).
+
+### Linux
+
+Either grab **`SVGPaw-<version>-x64.AppImage`**, make it executable and run it:
+
+```bash
+chmod +x SVGPaw-1.0.0-x64.AppImage && ./SVGPaw-1.0.0-x64.AppImage
+```
+
+…or unpack **`SVGPaw-<version>-linux-x64-portable.tar.gz`** anywhere and run
+`SVGPaw/svgpaw`. Both carry their own Python and Tk; nothing has to be
+installed. Needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+).
 
 ### From source
 
@@ -86,11 +98,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-The preview is rendered with **resvg** (a browser-faithful renderer that handles
-gradients, clip-paths and CSS-class styling correctly), with **PyMuPDF** as a
-fallback. Both ship self-contained wheels, so no system libraries are needed. If
-neither renderer is available the app still optimizes and saves — only the
-on-screen image preview is skipped (the *Markup* view keeps working).
+The preview is rendered with **resvg**, a browser-faithful renderer that handles
+gradients, clip-paths and CSS-class styling correctly. It ships self-contained
+wheels, so no system libraries are needed. If it is unavailable the app still
+optimizes and saves — only the on-screen image preview is skipped (the *Markup*
+view keeps working).
 
 ## Usage
 
@@ -247,9 +259,9 @@ where it is.
 
 ---
 
-## Building the Windows app
+## Building
 
-SVGPaw compiles to a native Windows program with
+SVGPaw compiles to a native program with
 [Nuitka](https://nuitka.net), which translates the Python sources to C and hands
 them to a real optimizing compiler. That is the reason to prefer it over a
 bytecode bundler such as PyInstaller here: the bundler ships the same CPython
@@ -257,7 +269,13 @@ bytecode in a wrapper, while Nuitka removes the interpreter from the hot paths
 and — with `--lto` — lets the compiler inline across module boundaries. The
 optimizer is pure Python and CPU-bound, so that is exactly where the work is.
 
-### What you need
+Both Windows and Linux are supported, and both can be produced from a Windows
+machine — the Linux artefacts are built in a container. Nuitka cannot
+cross-compile (it embeds the interpreter and the native extension modules of the
+build machine), so the container is not a trick to get around that; it simply
+*is* a Linux machine, running on a real kernel through WSL2.
+
+### What you need for the Windows build
 
 - **Visual Studio 2022** with the *Desktop development with C++* workload.
   MSVC produces the faster binary and is the best-tested backend for Nuitka's
@@ -275,33 +293,70 @@ optimizer is pure Python and CPU-bound, so that is exactly where the work is.
   pip install -r requirements.txt -r requirements-build.txt
   ```
 
-### Building
+### Building for Windows
 
 ```bash
 python build.py
 ```
 
-That compiles the app to `dist\SVGPaw\` and, if Inno Setup is present, writes
-`dist\SVGPaw-<version>-Setup.exe`. Expect roughly five minutes for the first
-run; Nuitka caches the compiled C objects, so later runs take about half that.
+Expect roughly five minutes for the first run; Nuitka caches the compiled C
+objects, so later runs take about half that. Everything lands in
+`dist\windows-x64\`:
+
+| File | What it is |
+| --- | --- |
+| `SVGPaw\` | the standalone folder |
+| `SVGPaw-<version>-windows-x64-portable.zip` | unpack and run, no install |
+| `SVGPaw-<version>-Setup.exe` | the installer |
+
+### Building for Linux
+
+Needs [Docker](https://docs.docker.com/desktop/); nothing else has to be
+installed on the host.
+
+```bash
+docker compose run --rm build-linux
+```
+
+The first run builds the image (Ubuntu 22.04, Python 3.13, gcc, Tk,
+`appimagetool`) and takes a few minutes; after that it is cached. Results land
+in `dist/linux-x64/`:
+
+| File | What it is |
+| --- | --- |
+| `SVGPaw/` | the standalone folder |
+| `SVGPaw-<version>-linux-x64-portable.tar.gz` | unpack and run, no install |
+| `SVGPaw-<version>-x64.AppImage` | single file, `chmod +x` and run |
+
+The container deliberately builds on Ubuntu 22.04: glibc is forward compatible
+but never backward, so linking against 2.35 means the result starts on anything
+newer, while a build on a current distro would refuse to run on 22.04. See
+[docker/README.md](docker/README.md) for the details.
+
+The two targets write to separate subtrees, so building both leaves you with one
+tree per platform and nothing overwritten.
+
+### Flags
 
 | Flag | Effect |
 | --- | --- |
-| `--clean` | Delete `build/` and `dist/` first |
-| `--no-installer` | Compile only |
-| `--installer-only` | Rebuild just the installer from the existing `dist/` |
-| `--onefile` | One portable `.exe` instead of a folder |
+| `--clean` | Delete this platform's `build/` and `dist/` subtree first |
+| `--no-installer` | Skip Inno Setup / `appimagetool` |
+| `--no-archive` | Skip the portable `.zip` / `.tar.gz` |
+| `--archive-format` | `zip` or `gztar` (default: `zip` on Windows, `gztar` on Linux) |
+| `--installer-only` | Rebuild just the installer from the existing folder |
+| `--onefile` | One portable binary instead of a folder |
 | `--jobs N` | Parallel compile jobs (default: every core) |
+
+The portable archive is a ZIP on Windows and a tarball on Linux on purpose: ZIP
+carries Unix permission bits, but not every graphical extractor honours them,
+and a portable build whose binary arrives without its executable bit is a
+support ticket waiting to happen. `--archive-format` overrides this.
 
 The default is a **standalone folder**, not `--onefile`. A onefile binary has to
 unpack itself into a temp directory on every launch, which costs a second or two
 of start-up; the installer puts the folder in place once, so that never happens.
 Use `--onefile` when you want a single file to copy around on a USB stick.
-
-**PyMuPDF is excluded from the build.** It is only the fallback renderer, resvg
-is what actually runs, and including it would add about 100 MB of binaries for a
-code path that is never reached. The import sits in a `try`/`except` and copes.
-Running from source is unaffected.
 
 The compiled program is self-contained — it carries its own Python, Tcl/Tk and
 every dependency — so the target machine needs no Python installation.
@@ -336,11 +391,18 @@ SVGPaw/
 ├── svgpaw.py               # the application (UI, preview, file handling)
 ├── svgo_worker.py          # the child process: optimize + rasterize, no Tk
 ├── svgo_engine.py          # plugin catalogue + settings -> svgo-py invocation
-├── build.py                # Nuitka compile + installer build
+├── build.py                # Nuitka compile, portable archive, installer
 ├── installer/
-│   └── svgpaw.iss          # Inno Setup script
+│   └── svgpaw.iss          # Inno Setup script (Windows)
+├── docker/
+│   ├── Dockerfile.linux    # the Linux build environment
+│   └── README.md           # how to build Linux from Windows
+├── docker-compose.yml      # docker compose run --rm build-linux
 ├── icon/
-│   ├── svg.ico             # app, installer and shell icon
+│   ├── icon.ico            # app, installer and shell icon (Windows)
+│   ├── icon.png            # the same for Linux .desktop / AppImage
+│   ├── paw.svg             # in-app logo, rendered at runtime
+│   └── settings.svg        # in-app gear icon
 ├── requirements.txt        # runtime dependencies
 ├── requirements-build.txt  # packaging dependencies
 ├── sample/                 # three test SVGs

@@ -19,6 +19,3 @@ tkinterdnd2>=0.4.0
 # resvg is a browser-faithful renderer (handles gradients, clip-paths, CSS
 # classes) and ships self-contained wheels, so no system libraries are needed.
 resvg-py>=0.1.5
-
-# Fallback renderer, used only if resvg is unavailable. Self-contained wheels.
-pymupdf>=1.24.0

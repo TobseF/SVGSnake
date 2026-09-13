@@ -20,7 +20,15 @@
   #define AppVersion   "1.0.0"
 #endif
 
-#define SourceDir      "..\dist\SVGPaw"
+; build.py passes /DSourceDir=... and /DOutputDir=... so that it stays the one
+; place where artefact paths are decided; these are the fallbacks for a manual
+; run from the Inno Setup IDE.
+#ifndef SourceDir
+  #define SourceDir    "..\dist\windows-x64\SVGPaw"
+#endif
+#ifndef OutputDir
+  #define OutputDir    "..\dist\windows-x64"
+#endif
 #define IconFile       "..\icon\icon.ico"
 
 [Setup]
@@ -43,7 +51,7 @@ AllowNoIcons=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
 
-OutputDir=..\dist
+OutputDir={#OutputDir}
 OutputBaseFilename={#AppName}-{#AppVersion}-Setup
 SetupIconFile={#IconFile}
 UninstallDisplayIcon={app}\{#AppExeName}
