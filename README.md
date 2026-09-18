@@ -1,11 +1,11 @@
-# <img alt="SVGPaw" src="docs/svg-paw-logo.svg" height="48"/>
+# <img alt="SVGSnake" src="docs/svg-snake-logo.svg" height="48"/>
 
 > Minimize your SVG footprint
 
 A desktop GUI for **[svgo-py](https://pypi.org/project/svgo-py/)** — the
 pure-Python port of [SVGO](https://github.com/svg/svgo), the SVG optimizer.
 
-![SVGPaw](docs/screenshot.png)
+![SVGSnake](docs/screenshot.png)
 
 Open (or drag & drop) SVG files, tune every SVGO plugin with a **live preview**,
 flip between **Original** and **Optimized** to see exactly what the optimizer
@@ -50,7 +50,7 @@ without a browser or Node.js.
 - **Configurable output** — a file-name **prefix** and suffix, an output folder
   (or "next to the original"), and an **overwrite without asking** switch.
 - Settings, plugin selection and the output rules are remembered between runs.
-- Dark theme with a red accent. The in-app icons are SVGs rendered by the app's
+- Dark theme with a venomous green accent matching the Python snake. The in-app icons are SVGs rendered by the app's
   own renderer, so they stay sharp at any scale and are recoloured from the
   palette rather than from a fixed bitmap.
 
@@ -60,21 +60,21 @@ without a browser or Node.js.
 
 ### Windows
 
-Run **`SVGPaw-<version>-Setup.exe`**. It installs per-user (no admin rights
+Run **`SVGSnake-<version>-Setup.exe`**. It installs per-user (no admin rights
 needed) and bundles everything — no Python installation required. Building that
 installer yourself is covered in
 [Building](#building).
 
 ### Linux
 
-Either grab **`SVGPaw-<version>-x64.AppImage`**, make it executable and run it:
+Either grab **`SVGSnake-<version>-x64.AppImage`**, make it executable and run it:
 
 ```bash
-chmod +x SVGPaw-1.0.0-x64.AppImage && ./SVGPaw-1.0.0-x64.AppImage
+chmod +x SVGSnake-1.0.0-x64.AppImage && ./SVGSnake-1.0.0-x64.AppImage
 ```
 
-…or unpack **`SVGPaw-<version>-linux-x64-portable.tar.gz`** anywhere and run
-`SVGPaw/svgpaw`. Both carry their own Python and Tk; nothing has to be
+…or unpack **`SVGSnake-<version>-linux-x64-portable.tar.gz`** anywhere and run
+`SVGSnake/svgsnake`. Both carry their own Python and Tk; nothing has to be
 installed. Needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+).
 
 ### From source
@@ -107,13 +107,13 @@ view keeps working).
 ## Usage
 
 ```bash
-python svgpaw.py
+python svgsnake.py
 ```
 
 You can also pass files directly:
 
 ```bash
-python svgpaw.py sample/svg-cat.svg sample/tiger.svg sample/car.svg
+python svgsnake.py sample/svg-cat.svg sample/tiger.svg sample/car.svg
 ```
 
 1. Click **Open SVG files…**, or drop files onto the preview area.
@@ -169,7 +169,7 @@ fixed folder for everything.
 
 > **Careful:** with an empty prefix *and* an empty suffix, the optimized file
 > replaces the original. The settings dialog warns you when that combination is
-> selected. SVGPaw asks before replacing any existing file unless
+> selected. SVGSnake asks before replacing any existing file unless
 > *Overwrite existing files without asking* is enabled.
 
 ---
@@ -199,7 +199,7 @@ Plugins always run in SVGO's own order, which is the order of the catalogue in
 [svgo_engine.py](svgo_engine.py) — regrouping the UI never changes the output.
 
 Output was verified against the reference JavaScript SVGO: for
-`sample/tiger.svg` with the default settings, SVGPaw and upstream SVGO 4.1
+`sample/tiger.svg` with the default settings, SVGSnake and upstream SVGO 4.1
 produce **byte-identical** files. On documents with `<style>` blocks small
 differences can remain — `svgo-py` reimplements csso's value-level CSS
 minification but not its structural passes; see the
@@ -231,16 +231,16 @@ refuses to shrink.
 Settings are stored locally in:
 
 ```
-~/.svgpaw/config.json
+~/.svgsnake/config.json
 ```
 
 It holds the output rules, the window's view preferences, which feature
 categories you collapsed, and your full SVGO plugin selection. Nothing is sent
-anywhere — SVGPaw is entirely offline. Delete the file to return to the
+anywhere — SVGSnake is entirely offline. Delete the file to return to the
 defaults.
 
 If you used this app under its old name, the settings from `~/.svgo_ui/config.json`
-are picked up automatically the first time SVGPaw starts; the old file is left
+are picked up automatically the first time SVGSnake starts; the old file is left
 where it is.
 
 ---
@@ -261,7 +261,7 @@ where it is.
 
 ## Building
 
-SVGPaw compiles to a native program with
+SVGSnake compiles to a native program with
 [Nuitka](https://nuitka.net), which translates the Python sources to C and hands
 them to a real optimizing compiler. That is the reason to prefer it over a
 bytecode bundler such as PyInstaller here: the bundler ships the same CPython
@@ -305,9 +305,9 @@ objects, so later runs take about half that. Everything lands in
 
 | File | What it is |
 | --- | --- |
-| `SVGPaw\` | the standalone folder |
-| `SVGPaw-<version>-windows-x64-portable.zip` | unpack and run, no install |
-| `SVGPaw-<version>-Setup.exe` | the installer |
+| `SVGSnake\` | the standalone folder |
+| `SVGSnake-<version>-windows-x64-portable.zip` | unpack and run, no install |
+| `SVGSnake-<version>-Setup.exe` | the installer |
 
 ### Building for Linux
 
@@ -324,9 +324,9 @@ in `dist/linux-x64/`:
 
 | File | What it is |
 | --- | --- |
-| `SVGPaw/` | the standalone folder |
-| `SVGPaw-<version>-linux-x64-portable.tar.gz` | unpack and run, no install |
-| `SVGPaw-<version>-x64.AppImage` | single file, `chmod +x` and run |
+| `SVGSnake/` | the standalone folder |
+| `SVGSnake-<version>-linux-x64-portable.tar.gz` | unpack and run, no install |
+| `SVGSnake-<version>-x64.AppImage` | single file, `chmod +x` and run |
 
 The container deliberately builds on Ubuntu 22.04: glibc is forward compatible
 but never backward, so linking against 2.35 means the result starts on anything
@@ -363,23 +363,23 @@ every dependency — so the target machine needs no Python installation.
 
 ### The installer
 
-`installer\svgpaw.iss` builds a standard Inno Setup wizard. It installs
+`installer\svgsnake.iss` builds a standard Inno Setup wizard. It installs
 **per-user by default**, so there is no UAC prompt; the first page offers an
 all-users install for anyone who wants one. It offers three optional choices:
 
 - a **desktop shortcut**,
-- **"Optimize with SVGPaw"** in the right-click menu for `.svg` and `.svgz`
+- **"Optimize with SVGSnake"** in the right-click menu for `.svg` and `.svgz`
   (on by default — it adds a verb without taking the file type over),
-- making SVGPaw the **default handler** for `.svg` and `.svgz` (off by default).
+- making SVGSnake the **default handler** for `.svg` and `.svgz` (off by default).
 
-SVGPaw always registers itself under *Open with*, whichever of those you pick.
+SVGSnake always registers itself under *Open with*, whichever of those you pick.
 Uninstalling removes everything it wrote, and asks separately whether to delete
-`~/.svgpaw` — answering nothing (a silent uninstall) keeps your settings.
+`~/.svgsnake` — answering nothing (a silent uninstall) keeps your settings.
 
 It supports the usual unattended switches:
 
 ```bash
-SVGPaw-1.0.0-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=contextmenu
+SVGSnake-1.0.0-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=contextmenu
 ```
 
 ---
@@ -387,21 +387,21 @@ SVGPaw-1.0.0-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=contextme
 ## Project layout
 
 ```
-SVGPaw/
-├── svgpaw.py               # the application (UI, preview, file handling)
+SVGSnake/
+├── svgsnake.py               # the application (UI, preview, file handling)
 ├── svgo_worker.py          # the child process: optimize + rasterize, no Tk
 ├── svgo_engine.py          # plugin catalogue + settings -> svgo-py invocation
 ├── build.py                # Nuitka compile, portable archive, installer
 ├── installer/
-│   └── svgpaw.iss          # Inno Setup script (Windows)
+│   └── svgsnake.iss          # Inno Setup script (Windows)
 ├── docker/
 │   ├── Dockerfile.linux    # the Linux build environment
 │   └── README.md           # how to build Linux from Windows
 ├── docker-compose.yml      # docker compose run --rm build-linux
-├── icon/
+├── icon/ 
 │   ├── icon.ico            # app, installer and shell icon (Windows)
 │   ├── icon.png            # the same for Linux .desktop / AppImage
-│   ├── paw.svg             # in-app logo, rendered at runtime
+│   ├── snake.svg             # in-app logo, rendered at runtime
 │   └── settings.svg        # in-app gear icon
 ├── requirements.txt        # runtime dependencies
 ├── requirements-build.txt  # packaging dependencies

@@ -1,18 +1,18 @@
 ; ---------------------------------------------------------------------------
-;  SVGPaw — Inno Setup installer script
+;  SVGSnake — Inno Setup installer script
 ;
-;  Built by build.py after Nuitka has produced dist\SVGPaw\. To build it by
+;  Built by build.py after Nuitka has produced dist\SVGSnake\. To build it by
 ;  hand, open this file in the Inno Setup IDE, or run:
 ;
-;      ISCC.exe installer\svgpaw.iss
+;      ISCC.exe installer\svgsnake.iss
 ;
-;  The result lands in dist\SVGPaw-<version>-Setup.exe.
+;  The result lands in dist\SVGSnake-<version>-Setup.exe.
 ; ---------------------------------------------------------------------------
 
-#define AppName        "SVGPaw"
+#define AppName        "SVGSnake"
 #define AppSlogan      "Minimize your SVG footprint"
 #define AppPublisher   "Tobse"
-#define AppExeName     "SVGPaw.exe"
+#define AppExeName     "SVGSnake.exe"
 #define AppId          "{{9C2F1B4E-6A7D-4E3C-9B15-2F8D4A6C7E10}"
 
 ; build.py passes /DAppVersion=...; this is the fallback for a manual run.
@@ -24,7 +24,7 @@
 ; place where artefact paths are decided; these are the fallbacks for a manual
 ; run from the Inno Setup IDE.
 #ifndef SourceDir
-  #define SourceDir    "..\dist\windows-x64\SVGPaw"
+  #define SourceDir    "..\dist\windows-x64\SVGSnake"
 #endif
 #ifndef OutputDir
   #define OutputDir    "..\dist\windows-x64"
@@ -107,7 +107,7 @@ Root: HKA; Subkey: "Software\Classes\{#AppName}.svg\DefaultIcon"; \
 Root: HKA; Subkey: "Software\Classes\{#AppName}.svg\shell\open\command"; \
     ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""
 
-; --- "Optimize with SVGPaw" on .svg / .svgz, without taking the default over.
+; --- "Optimize with SVGSnake" on .svg / .svgz, without taking the default over.
 Root: HKA; Subkey: "Software\Classes\.svg\shell\{#AppName}"; \
     ValueType: string; ValueName: ""; ValueData: "Optimize with {#AppName}"; \
     Tasks: contextmenu; Flags: uninsdeletekey
@@ -124,7 +124,7 @@ Root: HKA; Subkey: "Software\Classes\.svgz\shell\{#AppName}\command"; \
     ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""; \
     Tasks: contextmenu
 
-; --- make SVGPaw the default handler, only if that task was ticked.
+; --- make SVGSnake the default handler, only if that task was ticked.
 Root: HKA; Subkey: "Software\Classes\.svg"; \
     ValueType: string; ValueName: ""; ValueData: "{#AppName}.svg"; \
     Tasks: associate; Flags: uninsdeletevalue
@@ -132,7 +132,7 @@ Root: HKA; Subkey: "Software\Classes\.svgz"; \
     ValueType: string; ValueName: ""; ValueData: "{#AppName}.svg"; \
     Tasks: associate; Flags: uninsdeletevalue
 
-; --- so SVGPaw shows up under "Open with" regardless.
+; --- so SVGSnake shows up under "Open with" regardless.
 Root: HKA; Subkey: "Software\Classes\.svg\OpenWithProgids"; \
     ValueType: string; ValueName: "{#AppName}.svg"; ValueData: ""; \
     Flags: uninsdeletevalue
@@ -150,7 +150,7 @@ Filename: "{app}\{#AppExeName}"; \
 Type: filesandordirs; Name: "{app}\__pycache__"
 
 [Code]
-// The user's settings live in %USERPROFILE%\.svgpaw and are deliberately left
+// The user's settings live in %USERPROFILE%\.svgsnake and are deliberately left
 // behind on uninstall — unless they ask for a clean sweep.
 //
 // UninstallSilent() has to be checked explicitly: /SUPPRESSMSGBOXES does not
@@ -164,9 +164,9 @@ begin
   begin
     if UninstallSilent() then
       Exit;
-    ConfigDir := ExpandConstant('{%USERPROFILE}\.svgpaw');
+    ConfigDir := ExpandConstant('{%USERPROFILE}\.svgsnake');
     if DirExists(ConfigDir) then
-      if MsgBox('Also remove your SVGPaw settings and plugin selection?' + #13#10 +
+      if MsgBox('Also remove your SVGSnake settings and plugin selection?' + #13#10 +
                 ConfigDir, mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
         DelTree(ConfigDir, True, True, True);
   end;

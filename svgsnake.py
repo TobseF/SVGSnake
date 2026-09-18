@@ -1,5 +1,5 @@
 """
-SVGPaw — Minimize your SVG footprint
+SVGSnake — Minimize your SVG footprint
 ====================================
 A desktop front-end for `svgo-py <https://pypi.org/project/svgo-py/>`_ — the
 pure-Python port of SVGO. Open (or drag & drop) SVG files, tune every SVGO
@@ -7,9 +7,9 @@ plugin with a live preview, flip between *Original* and *Optimized*, and write
 the result back with a configurable file-name prefix.
 
 Modelled on SVGOMG (https://svgomg.net) for the settings, and on the
-Recraft Vectorizer for the dark/red look and the preview plumbing.
+Recraft Vectorizer for the dark look and the preview plumbing, with a venomous python green accent.
 
-Run:  python svgpaw.py
+Run:  python svgsnake.py
 """
 
 from __future__ import annotations
@@ -46,19 +46,19 @@ except Exception:  # pragma: no cover - optional dependency
 #  Constants / palette
 # --------------------------------------------------------------------------- #
 
-APP_NAME = "SVGPaw"
+APP_NAME = "SVGSnake"
 APP_SLOGAN = "Minimize your SVG footprint"
 APP_VERSION = "1.0.0"
 APP_PUBLISHER = "Tobse"
 
 #: Windows task-bar identity. Without it the shell groups the window under the
 #: Python interpreter and shows its icon instead of ours.
-APP_ID = "Tobse.SVGPaw.1"
+APP_ID = "Tobse.SVGSnake.1"
 
-CONFIG_DIR = Path.home() / ".svgpaw"
+CONFIG_DIR = Path.home() / ".svgsnake"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
-#: Settings location used before the app was renamed to SVGPaw. Read once, on
+#: Settings location used before the app was renamed to SVGSnake. Read once, on
 #: first start, so an existing plugin selection survives the rename.
 LEGACY_CONFIG_PATH = Path.home() / ".svgo_ui" / "config.json"
 
@@ -73,19 +73,28 @@ ICON_PNG = APP_DIR / "icon" / "icon.png"
 #: In-app artwork. These are SVGs on purpose — the app already carries a
 #: browser-faithful SVG renderer, so the icons stay crisp at any size or DPI
 #: instead of being resampled from a fixed bitmap.
-ICON_PAW_SVG = APP_DIR / "icon" / "paw.svg"
+ICON_SVG = APP_DIR / "icon" / "snake.svg"
 ICON_SETTINGS_SVG = APP_DIR / "icon" / "settings.svg"
 
-# Dark theme with a red accent (same palette as the Recraft Vectorizer).
+# Dark theme with a venomous snake green accent (python viper look).
 COL_BG = "#161616"
 COL_PANEL = "#1f1f1f"
 COL_PANEL_2 = "#262626"
 COL_BORDER = "#333333"
 COL_TEXT = "#ECECEC"
 COL_TEXT_DIM = "#9a9a9a"
-COL_RED = "#E23744"
-COL_RED_HOVER = "#c02734"
-COL_GREEN = "#4CAF7D"
+
+# Accent: venomous python snake green ("Giftgrün")
+COL_ACCENT = "#00E676"
+COL_ACCENT_HOVER = "#00C853"
+COL_ACCENT_TEXT = "#0E1A10"
+
+# Semantic colors
+COL_GREEN = "#00E676"
+COL_ERROR = "#E23744"
+COL_ERROR_HOVER = "#c02734"
+COL_RED = COL_ERROR  # backwards compatibility alias
+COL_RED_HOVER = COL_ERROR_HOVER
 
 SVG_FILETYPES = [("SVG images", "*.svg *.svgz"), ("All files", "*.*")]
 
@@ -248,10 +257,10 @@ def render_svg_icon(path: Path, box: int, tint: str | None = None) -> "ctk.CTkIm
 
 
 def _load_logo_image(size: int) -> "ctk.CTkImage | None":
-    """The paw mark for the sidebar header, or None if no asset renders."""
-    paw = render_svg_icon(ICON_PAW_SVG, size)
-    if paw is not None:
-        return paw
+    """The snake mark for the sidebar header, or None if no asset renders."""
+    snake = render_svg_icon(ICON_SVG, size, tint=COL_ACCENT)
+    if snake is not None:
+        return snake
     try:  # the app icon, should the SVG or the renderer be unavailable
         img = Image.open(ICON_PNG).convert("RGBA")
     except Exception:
@@ -283,25 +292,66 @@ def bind_hover_image(button: ctk.CTkButton, normal, hovered) -> None:
     _bind(button)
 
 
-def apply_window_icon(window: tk.Misc) -> None:
-    """Give a window the paw icon — title bar, task bar and Alt-Tab.
-
-    ``iconbitmap`` is the only call Windows honours for the task bar, but it
-    needs a real ``.ico`` on disk; ``iconphoto`` is the cross-platform fallback
-    and also covers the case where the ``.ico`` was not shipped.
-    """
-    if ICON_ICO.exists():
+def _ensure_ico() -> Path | None:
+    """Ensure a Windows .ico is available from ICON_PNG, creating or updating it if needed."""
+    if not ICON_PNG.exists():
+        return ICON_ICO if ICON_ICO.exists() else None
+    try:
+        if ICON_ICO.exists() and ICON_ICO.stat().st_mtime >= ICON_PNG.stat().st_mtime:
+            return ICON_ICO
+        img = Image.open(ICON_PNG)
         try:
-            window.iconbitmap(default=str(ICON_ICO))
-            return
+            ICON_ICO.parent.mkdir(parents=True, exist_ok=True)
+            img.save(
+                ICON_ICO,
+                format="ICO",
+                sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+            )
+            return ICON_ICO
+        except (OSError, PermissionError):
+            fallback = CONFIG_DIR / "icon.ico"
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            img.save(
+                fallback,
+                format="ICO",
+                sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+            )
+            return fallback
+    except Exception:
+        return ICON_ICO if ICON_ICO.exists() else None
+
+
+def apply_window_icon(window: tk.Misc) -> None:
+    """Give a window the snake icon — title bar, task bar and Alt-Tab.
+
+    Uses ``icon/icon.png`` as the primary runtime icon. On Windows, also derives
+    or applies a multi-size .ico so the native DWM title bar and task bar receive
+    crisp HICONs, and marks ``_iconbitmap_method_called`` to prevent CustomTkinter
+    from overwriting the icon with its default asset after 200 ms.
+    """
+    # Prevent CustomTkinter's delayed _windows_set_titlebar_icon timer from
+    # overriding our icon with CustomTkinter_icon_Windows.ico.
+    setattr(window, "_iconbitmap_method_called", True)
+
+    if ICON_PNG.exists():
+        try:
+            photo = ImageTk.PhotoImage(Image.open(ICON_PNG))
+            window.iconphoto(True, photo)
+            window._snake_icon = photo  # Tk does not keep its own reference
         except Exception:
             pass
-    try:
-        photo = ImageTk.PhotoImage(Image.open(ICON_PNG))
-        window.iconphoto(True, photo)
-        window._paw_icon = photo  # Tk does not keep its own reference
-    except Exception:
-        pass
+
+    if sys.platform == "win32":
+        ico = _ensure_ico()
+        if ico and ico.exists():
+            try:
+                window.iconbitmap(str(ico))
+            except Exception:
+                pass
+            try:
+                window.iconbitmap(default=str(ico))
+            except Exception:
+                pass
 
 
 # --------------------------------------------------------------------------- #
@@ -400,7 +450,7 @@ class Spinner(ctk.CTkFrame):
         box = (inset, inset, size - inset, size - inset)
         self.canvas.create_oval(*box, outline=COL_BORDER, width=width)
         self._arc = self.canvas.create_arc(
-            *box, start=90, extent=105, style="arc", outline=COL_RED,
+            *box, start=90, extent=105, style="arc", outline=COL_ACCENT,
             width=width,
         )
         self.label = ctk.CTkLabel(self, text=text, text_color=COL_TEXT_DIM,
@@ -467,7 +517,7 @@ class SavedPie(tk.Canvas):
             self._wedge,
             state="normal",
             extent=-359.99 if share >= 0.9999 else -360.0 * share,
-            fill=COL_GREEN if percent > 0 else COL_RED,
+            fill=COL_GREEN if percent > 0 else COL_ERROR,
         )
 
 
@@ -651,7 +701,7 @@ class PreviewWorker:
             self._results = self._ctx.Queue()
             self._proc = self._ctx.Process(
                 target=svgo_worker.worker_loop, args=(self._jobs, self._results),
-                name="svgpaw-preview", daemon=True,
+                name="svgsnake-preview", daemon=True,
             )
             self._proc.start()
         except Exception:
@@ -920,10 +970,10 @@ class CodeView(ctk.CTkFrame):
         self.text = tk.Text(
             self, wrap="word", bg=COL_PANEL, fg="#d6d6d6", insertbackground=COL_TEXT,
             relief="flat", bd=0, padx=14, pady=12, font=("Consolas", 10),
-            selectbackground=COL_RED, selectforeground="#ffffff",
+            selectbackground=COL_ACCENT, selectforeground=COL_ACCENT_TEXT,
         )
         yscroll = ctk.CTkScrollbar(self, command=self.text.yview,
-                                   button_color=COL_BORDER, button_hover_color=COL_RED)
+                                   button_color=COL_BORDER, button_hover_color=COL_ACCENT)
         self.text.configure(yscrollcommand=yscroll.set)
 
         self.grid_rowconfigure(0, weight=1)
@@ -1028,7 +1078,7 @@ class PluginGroup:
         self.header = ctk.CTkFrame(self.container, fg_color=COL_PANEL_2, corner_radius=6)
         self.header.pack(fill="x")
         self.chevron = ctk.CTkLabel(
-            self.header, text="▾", text_color=COL_RED, width=16,
+            self.header, text="▾", text_color=COL_ACCENT, width=16,
             font=ctk.CTkFont(size=12, weight="bold"), cursor="hand2",
         )
         self.chevron.pack(side="left", padx=(8, 2), pady=5)
@@ -1114,6 +1164,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self.config_ref = config
 
         self.title("Settings")
+        apply_window_icon(self)
         self.geometry("580x470")
         self.minsize(520, 430)
         self.configure(fg_color=COL_BG)
@@ -1137,7 +1188,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self.source_dir_var = ctk.BooleanVar(value=bool(config["use_source_dir"]))
         ctk.CTkCheckBox(
             body, text="Save next to the original file", variable=self.source_dir_var,
-            command=self._sync_dir_state, fg_color=COL_RED, hover_color=COL_RED_HOVER,
+            command=self._sync_dir_state, fg_color=COL_ACCENT, hover_color=COL_ACCENT_HOVER,
             text_color=COL_TEXT,
         ).pack(anchor="w", padx=16, pady=(0, 6))
 
@@ -1184,7 +1235,7 @@ class SettingsDialog(ctk.CTkToplevel):
         ctk.CTkCheckBox(
             body, text="Overwrite existing files without asking",
             variable=self.overwrite_var, command=self._update_name_preview,
-            fg_color=COL_RED, hover_color=COL_RED_HOVER, text_color=COL_TEXT,
+            fg_color=COL_ACCENT, hover_color=COL_ACCENT_HOVER, text_color=COL_TEXT,
         ).pack(anchor="w", padx=16, pady=(0, 4))
         ctk.CTkLabel(
             body,
@@ -1201,8 +1252,8 @@ class SettingsDialog(ctk.CTkToplevel):
             command=self.destroy,
         ).pack(side="right")
         ctk.CTkButton(
-            btn_row, text="Save", fg_color=COL_RED, hover_color=COL_RED_HOVER,
-            command=self._save,
+            btn_row, text="Save", fg_color=COL_ACCENT, hover_color=COL_ACCENT_HOVER,
+            text_color=COL_ACCENT_TEXT, command=self._save,
         ).pack(side="right", padx=(0, 10))
 
         self._sync_dir_state()
@@ -1210,7 +1261,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _sub(self, parent, text: str) -> None:
         ctk.CTkLabel(
-            parent, text=text.upper(), text_color=COL_RED,
+            parent, text=text.upper(), text_color=COL_ACCENT,
             font=ctk.CTkFont(size=12, weight="bold"), anchor="w",
         ).pack(fill="x", padx=16, pady=(14, 6))
 
@@ -1238,7 +1289,7 @@ class SettingsDialog(ctk.CTkToplevel):
         colour = COL_TEXT_DIM
         if not prefix and not suffix:
             text += "\n⚠ No prefix or suffix — this replaces the original file."
-            colour = COL_RED
+            colour = COL_ERROR
         self.preview_label.configure(text=text, text_color=colour)
 
     def _save(self) -> None:
@@ -1402,17 +1453,21 @@ class App(*_AppBase):  # type: ignore[misc]
             self._logo_image = logo  # keep a reference alive
         else:
             ctk.CTkLabel(
-                header, text="●", text_color=COL_RED,
+                header, text="●", text_color=COL_ACCENT,
                 font=ctk.CTkFont(size=22, weight="bold"),
             ).pack(side="left")
         ctk.CTkLabel(
-            header, text=f"  {APP_NAME}", font=ctk.CTkFont(size=20, weight="bold"),
+            header, text="  SVG", font=ctk.CTkFont(size=20, weight="bold"),
             text_color=COL_TEXT,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            header, text="Snake", font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=COL_ACCENT,
         ).pack(side="left")
         # The gear reads as a normal-weight glyph at this size, so it gets the
         # full text colour rather than the dimmed one, and turns red on hover.
         self._gear_icon = render_svg_icon(ICON_SETTINGS_SVG, 18, tint=COL_TEXT)
-        self._gear_icon_hover = render_svg_icon(ICON_SETTINGS_SVG, 18, tint=COL_RED)
+        self._gear_icon_hover = render_svg_icon(ICON_SETTINGS_SVG, 18, tint=COL_ACCENT)
         gear = ctk.CTkButton(
             header, text="", width=36, height=36, font=ctk.CTkFont(size=18),
             fg_color="transparent", hover_color=COL_PANEL_2, text_color=COL_TEXT,
@@ -1438,8 +1493,8 @@ class App(*_AppBase):  # type: ignore[misc]
         btn_row = ctk.CTkFrame(files, fg_color="transparent")
         btn_row.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 6))
         ctk.CTkButton(
-            btn_row, text="Open SVG files…", fg_color=COL_RED, hover_color=COL_RED_HOVER,
-            height=40, font=ctk.CTkFont(size=14, weight="bold"),
+            btn_row, text="Open SVG files…", fg_color=COL_ACCENT, hover_color=COL_ACCENT_HOVER,
+            text_color=COL_ACCENT_TEXT, height=40, font=ctk.CTkFont(size=14, weight="bold"),
             command=self._choose_files,
         ).pack(side="left", fill="x", expand=True)
         clear = ctk.CTkButton(
@@ -1507,7 +1562,7 @@ class App(*_AppBase):  # type: ignore[misc]
         head = ctk.CTkFrame(panel, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 2))
         ctk.CTkLabel(
-            head, text="3 · FEATURES", text_color=COL_RED,
+            head, text="3 · FEATURES", text_color=COL_ACCENT,
             font=ctk.CTkFont(size=12, weight="bold"),
         ).pack(side="left")
         reset = ctk.CTkButton(
@@ -1559,7 +1614,7 @@ class App(*_AppBase):  # type: ignore[misc]
 
     def _section(self, parent, text: str, row: int | None = None, pack: bool = False):
         label = ctk.CTkLabel(
-            parent, text=text.upper(), text_color=COL_RED,
+            parent, text=text.upper(), text_color=COL_ACCENT,
             font=ctk.CTkFont(size=12, weight="bold"), anchor="w",
         )
         if pack:
@@ -1574,8 +1629,8 @@ class App(*_AppBase):  # type: ignore[misc]
         row.pack(fill="x", padx=padx, pady=1)
         sw = ctk.CTkSwitch(
             row, text=text, variable=var, command=command,
-            progress_color=COL_RED, button_color="#d0d0d0",
-            button_hover_color="#ffffff", fg_color=COL_BORDER,
+            progress_color=COL_ACCENT, button_color=COL_ACCENT,
+            button_hover_color=COL_ACCENT_HOVER, fg_color=COL_BORDER,
             text_color=COL_TEXT, switch_width=38, switch_height=18,
             font=ctk.CTkFont(size=12 if small else 13),
         )
@@ -1602,8 +1657,8 @@ class App(*_AppBase):  # type: ignore[misc]
         slider = ctk.CTkSlider(
             parent, from_=engine.PRECISION_MIN, to=engine.PRECISION_MAX,
             number_of_steps=engine.PRECISION_MAX - engine.PRECISION_MIN,
-            progress_color=COL_RED, button_color=COL_RED,
-            button_hover_color=COL_RED_HOVER, fg_color=COL_BORDER,
+            progress_color=COL_ACCENT, button_color=COL_ACCENT,
+            button_hover_color=COL_ACCENT_HOVER, fg_color=COL_BORDER,
             command=lambda v, k=key, lbl=value_label: self._on_precision(k, lbl, v),
         )
         slider.set(int(self.settings[key]))
@@ -1623,7 +1678,7 @@ class App(*_AppBase):  # type: ignore[misc]
 
         self.view_toggle = ctk.CTkSegmentedButton(
             bar, values=["Original", "Optimized"], command=self._on_view_toggle,
-            selected_color=COL_RED, selected_hover_color=COL_RED_HOVER,
+            selected_color=COL_ACCENT, selected_hover_color=COL_ACCENT_HOVER,
             unselected_color=COL_PANEL_2, fg_color=COL_PANEL,
             font=ctk.CTkFont(size=13, weight="bold"),
         )
@@ -1708,8 +1763,9 @@ class App(*_AppBase):  # type: ignore[misc]
         actions.grid(row=4, column=0, sticky="ew", padx=22, pady=(0, 6))
 
         self.save_btn = ctk.CTkButton(
-            actions, text="Save", height=42, width=150, fg_color=COL_RED,
-            hover_color=COL_RED_HOVER, font=ctk.CTkFont(size=14, weight="bold"),
+            actions, text="Save", height=42, width=150, fg_color=COL_ACCENT,
+            hover_color=COL_ACCENT_HOVER, text_color=COL_ACCENT_TEXT,
+            font=ctk.CTkFont(size=14, weight="bold"),
             command=self._save_current, state="disabled",
         )
         self.save_btn.pack(side="left")
@@ -1739,7 +1795,7 @@ class App(*_AppBase):  # type: ignore[misc]
         # Status --------------------------------------------------------------
         foot = ctk.CTkFrame(right, fg_color="transparent")
         foot.grid(row=5, column=0, sticky="ew", padx=22, pady=(0, 16))
-        self.progress = ctk.CTkProgressBar(foot, progress_color=COL_RED, height=4)
+        self.progress = ctk.CTkProgressBar(foot, progress_color=COL_ACCENT, height=4)
         self.progress.set(0)
         self.progress.pack(fill="x", pady=(0, 4))
         self._show_progress(False)
@@ -1811,7 +1867,7 @@ class App(*_AppBase):  # type: ignore[misc]
             self.status.configure(
                 text=f"Ignored {len(skipped)} non-SVG file(s): {', '.join(skipped[:3])}"
                      + ("…" if len(skipped) > 3 else ""),
-                text_color=COL_RED,
+                text_color=COL_ERROR,
             )
 
     def _add_doc(self, path: Path) -> int | None:
@@ -1893,10 +1949,11 @@ class App(*_AppBase):  # type: ignore[misc]
         self._highlight_row()
 
     def _highlight_row(self) -> None:
-        for i, (row, name, _size) in enumerate(self._row_widgets):
+        for i, (row, name, size) in enumerate(self._row_widgets):
             selected = i == self.current
-            row.configure(fg_color=COL_RED if selected else "transparent")
-            name.configure(text_color="#ffffff" if selected else COL_TEXT)
+            row.configure(fg_color=COL_ACCENT if selected else "transparent")
+            name.configure(text_color=COL_ACCENT_TEXT if selected else COL_TEXT)
+            size.configure(text_color=COL_ACCENT_TEXT if selected else COL_TEXT_DIM)
 
     def _select(self, index: int) -> None:
         if not 0 <= index < len(self.docs):
@@ -2016,7 +2073,7 @@ class App(*_AppBase):  # type: ignore[misc]
         """
         self.progress.configure(
             fg_color=COL_PANEL_2 if visible else COL_BG,
-            progress_color=COL_RED if visible else COL_BG,
+            progress_color=COL_ACCENT if visible else COL_BG,
         )
 
     def _set_working(self, working: bool, text: str = "") -> None:
@@ -2104,7 +2161,7 @@ class App(*_AppBase):  # type: ignore[misc]
         doc.render_stamp = stamp
 
         if error:
-            self.status.configure(text=f"SVGO error: {error}", text_color=COL_RED)
+            self.status.configure(text=f"SVGO error: {error}", text_color=COL_ERROR)
         else:
             saved = saved_percent(len(doc.original), len(optimized or b""))
             verb = "smaller" if saved >= 0 else "larger"
@@ -2171,7 +2228,7 @@ class App(*_AppBase):  # type: ignore[misc]
         self.stat_optimized.configure(text=human_size(after), text_color=COL_TEXT)
         self.stat_saved.configure(
             text=f"{saved:.1f}%" if saved >= 0 else f"+{-saved:.1f}%",
-            text_color=COL_GREEN if saved > 0 else COL_RED,
+            text_color=COL_GREEN if saved > 0 else COL_ERROR,
         )
         self.saved_pie.set_percent(saved)
 
@@ -2180,8 +2237,9 @@ class App(*_AppBase):  # type: ignore[misc]
         # A disabled accent button still reads as "press me", so grey it out.
         self.save_btn.configure(
             state=state,
-            fg_color=COL_RED if state == "normal" else COL_PANEL_2,
-            hover_color=COL_RED_HOVER if state == "normal" else COL_BORDER,
+            fg_color=COL_ACCENT if state == "normal" else COL_PANEL_2,
+            hover_color=COL_ACCENT_HOVER if state == "normal" else COL_BORDER,
+            text_color=COL_ACCENT_TEXT if state == "normal" else COL_TEXT_DIM,
         )
         self.save_as_btn.configure(state=state)
         self.save_all_btn.configure(
@@ -2359,7 +2417,7 @@ class App(*_AppBase):  # type: ignore[misc]
         noun = "file" if written == 1 else "files"
         if failures:
             self.status.configure(
-                text=f"Saved {written} {noun}, {len(failures)} failed.", text_color=COL_RED)
+                text=f"Saved {written} {noun}, {len(failures)} failed.", text_color=COL_ERROR)
             messagebox.showerror(
                 APP_NAME, "Some files could not be saved:\n\n" + "\n".join(failures[:10]))
         else:
@@ -2381,7 +2439,7 @@ class App(*_AppBase):  # type: ignore[misc]
 # --------------------------------------------------------------------------- #
 
 def _set_windows_app_id() -> None:
-    """Detach the task-bar entry from the Python host so it shows the paw."""
+    """Detach the task-bar entry from the Python host so it shows the snake."""
     if sys.platform != "win32":
         return
     try:
@@ -2393,7 +2451,7 @@ def _set_windows_app_id() -> None:
 
 
 def main() -> None:
-    # A spawned worker re-runs this executable; without this it would open a
+    # A ssnakened worker re-runs this executable; without this it would open a
     # second window instead of answering jobs.
     mp.freeze_support()
     _set_windows_app_id()

@@ -1,5 +1,5 @@
 """
-SVGPaw — build script (Windows and Linux)
+SVGSnake — build script (Windows and Linux)
 =========================================
 Compiles the app to a native program with **Nuitka** and packages the result
 two ways: a portable archive that runs from any folder, and a platform
@@ -44,12 +44,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-import svgpaw  # noqa: E402  — for the single source of truth on name/version
+import svgsnake  # noqa: E402  — for the single source of truth on name/version
 
-APP_NAME = svgpaw.APP_NAME
-APP_VERSION = svgpaw.APP_VERSION
-APP_SLOGAN = svgpaw.APP_SLOGAN
-APP_PUBLISHER = svgpaw.APP_PUBLISHER
+APP_NAME = svgsnake.APP_NAME
+APP_VERSION = svgsnake.APP_VERSION
+APP_SLOGAN = svgsnake.APP_SLOGAN
+APP_PUBLISHER = svgsnake.APP_PUBLISHER
 
 # --------------------------------------------------------------------------- #
 #  Platform
@@ -63,7 +63,7 @@ IS_LINUX = sys.platform.startswith("linux")
 
 #: The binary name. Windows keeps the branded spelling because it is what the
 #: user sees in the Start menu; on Linux an executable on $PATH is lowercase.
-EXE_NAME = "SVGPaw.exe" if IS_WINDOWS else "svgpaw"
+EXE_NAME = "SVGSnake.exe" if IS_WINDOWS else "svgsnake"
 
 PLATFORM_TAG = "windows" if IS_WINDOWS else "linux"
 
@@ -82,7 +82,7 @@ ARCH_TAG = {
 DEFAULT_ARCHIVE_FORMAT = "zip" if IS_WINDOWS else "gztar"
 ARCHIVE_SUFFIX = {"zip": ".zip", "gztar": ".tar.gz"}
 
-ENTRY = ROOT / "svgpaw.py"
+ENTRY = ROOT / "svgsnake.py"
 ICON_DIR = ROOT / "icon"
 ICON_ICO = ICON_DIR / "icon.ico"          # Windows executable resource
 ICON_PNG = ICON_DIR / "icon.png"          # Linux .desktop / AppImage
@@ -94,7 +94,7 @@ BUILD_DIR = ROOT / "build" / f"{PLATFORM_TAG}-{ARCH_TAG}"
 DIST_ROOT = ROOT / "dist"
 OUT_DIR = DIST_ROOT / f"{PLATFORM_TAG}-{ARCH_TAG}"
 INSTALLER_DIR = ROOT / "installer"
-ISS = INSTALLER_DIR / "svgpaw.iss"
+ISS = INSTALLER_DIR / "svgsnake.iss"
 
 #: Test frameworks and build tooling that Nuitka would otherwise drag in behind
 #: a stray import. resvg is the only renderer, so nothing renderer-side is cut.
@@ -137,6 +137,18 @@ def check_environment() -> None:
         fail(f"unsupported platform: {sys.platform} (this script builds Windows and Linux)")
     if not ENTRY.exists():
         fail(f"entry point not found: {ENTRY}")
+
+    if IS_WINDOWS and (not ICON_ICO.exists() or (ICON_PNG.exists() and ICON_PNG.stat().st_mtime > ICON_ICO.stat().st_mtime)):
+        if ICON_PNG.exists():
+            from PIL import Image
+
+            log(f"generating {ICON_ICO.name} from {ICON_PNG.name}")
+            img = Image.open(ICON_PNG)
+            img.save(
+                ICON_ICO,
+                format="ICO",
+                sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+            )
 
     icon = ICON_ICO if IS_WINDOWS else ICON_PNG
     if not icon.exists():
@@ -280,7 +292,7 @@ def nuitka_command(onefile: bool, jobs: int) -> list[str]:
             cmd.append(f"--linux-icon={ICON_PNG}")
 
     if onefile:
-        cmd += ["--onefile", "--onefile-tempdir-spec={CACHE_DIR}/SVGPaw/{VERSION}"]
+        cmd += ["--onefile", "--onefile-tempdir-spec={CACHE_DIR}/SVGSnake/{VERSION}"]
 
     cmd += [f"--nofollow-import-to={name}" for name in EXCLUDED_MODULES]
     cmd += [f"--noinclude-data-files={pattern}" for pattern in UNUSED_TKDND]
@@ -303,7 +315,7 @@ def compile_app(onefile: bool, jobs: int) -> Path:
         fail(f"Nuitka exited with code {result.returncode}")
     log(f"compiled in {time.time() - started:.0f}s")
 
-    produced = BUILD_DIR / ("svgpaw.dist" if not onefile else "")
+    produced = BUILD_DIR / ("svgsnake.dist" if not onefile else "")
     exe = (produced / EXE_NAME) if not onefile else (BUILD_DIR / EXE_NAME)
     if not exe.exists():
         fail(f"expected binary not found: {exe}")
@@ -407,7 +419,7 @@ Type=Application
 Name={APP_NAME}
 Comment={APP_SLOGAN}
 Exec={EXE_NAME} %f
-Icon=svgpaw
+Icon=svgsnake
 Categories=Graphics;Development;
 MimeType=image/svg+xml;
 Terminal=false
@@ -447,7 +459,7 @@ def build_appimage() -> Path | None:
     apprun = app_dir / "AppRun"
     apprun.write_text(APPRUN, encoding="utf-8")
     apprun.chmod(0o755)
-    shutil.copy2(ICON_PNG, app_dir / "svgpaw.png")
+    shutil.copy2(ICON_PNG, app_dir / "svgsnake.png")
 
     out = OUT_DIR / f"{APP_NAME}-{APP_VERSION}-{ARCH_TAG}.AppImage"
     if out.exists():

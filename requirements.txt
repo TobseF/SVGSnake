@@ -1,10 +1,10 @@
 # ---------------------------------------------------------------------------
-# SVGPaw — runtime dependencies
+# SVGSnake — runtime dependencies
 # ---------------------------------------------------------------------------
 
 # The optimizer itself: a pure-Python 1:1 port of SVGO 4.1.0.
 # No Node.js, no JavaScript interpreter needed.
-svgo-py>=4.1.0
+svgo-py>=4.1.0.1
 
 # UI toolkit (dark theme on top of Tkinter).
 customtkinter>=5.2.0

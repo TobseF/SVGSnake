@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-#  SVGPaw — containerised Linux build
+#  SVGSnake — containerised Linux build
 #
 #      docker compose run --rm build-linux           # compile + archive + AppImage
 #      docker compose run --rm build-linux python build.py --no-installer
@@ -13,7 +13,7 @@ x-build-linux: &build-linux
   build:
     context: .
     dockerfile: docker/Dockerfile.linux
-  image: svgpaw-build:linux
+  image: svgsnake-build:linux
   working_dir: /src
   volumes:
     # The source tree is mounted rather than copied, so a rebuild needs no

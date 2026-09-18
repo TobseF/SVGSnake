@@ -24,9 +24,9 @@ Artefacts land in `dist/linux-x64/`:
 
 | File | What it is |
 |---|---|
-| `SVGPaw/` | the standalone folder |
-| `SVGPaw-1.0.0-linux-x64-portable.tar.gz` | unpack and run, no install |
-| `SVGPaw-1.0.0-x64.AppImage` | single file, `chmod +x` and double-click |
+| `SVGSnake/` | the standalone folder |
+| `SVGSnake-1.0.0-linux-x64-portable.tar.gz` | unpack and run, no install |
+| `SVGSnake-1.0.0-x64.AppImage` | single file, `chmod +x` and double-click |
 
 The Windows build writes to `dist/windows-x64/`, so running both leaves you with
 one tree per platform and nothing overwritten.

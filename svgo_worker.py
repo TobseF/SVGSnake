@@ -21,7 +21,7 @@ travel as PNG bytes rather than as PIL images — that is what the renderer hand
 us anyway, and it keeps the pickled payload small.
 
 Cancelling a run is the parent's business: it kills the process (see
-``PreviewWorker`` in ``svgpaw.py``), which is why nothing in here has to be
+``PreviewWorker`` in ``svgsnake.py``), which is why nothing in here has to be
 interruptible.
 """
 

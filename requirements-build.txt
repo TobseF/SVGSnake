@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# SVGPaw — build-time dependencies (Windows packaging)
+# SVGSnake — build-time dependencies (Windows packaging)
 #
 # Only needed to produce the .exe and the installer; see build.py.
 # Install the runtime dependencies from requirements.txt as well.

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ---------------------------------------------------------------------------
-#  SVGPaw — Linux build environment
+#  SVGSnake — Linux build environment
 #
 #  Produces the Linux artefacts from any host that runs Docker, including
 #  Windows via WSL2. This is not cross-compiling: the container is a real
